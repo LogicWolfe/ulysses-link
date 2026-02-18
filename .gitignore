@@ -1,0 +1,11 @@
+# Rust build artifacts
+doc-link/target/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~

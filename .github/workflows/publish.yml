@@ -24,6 +24,8 @@ jobs:
     needs: [lint, test]
     runs-on: ubuntu-latest
     container: rust:latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 

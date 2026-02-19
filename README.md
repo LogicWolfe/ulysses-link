@@ -56,55 +56,7 @@ ulysses-link manages its config file automatically when you use `sync` and `remo
 ulysses-link config
 ```
 
-This opens `~/.config/ulysses-link/config.toml` in your `$EDITOR`. The config looks like this:
-
-```toml
-version = 1
-output_dir = "~/ulysses-link"
-
-[[repos]]
-path = "~/code/my-project"
-
-[[repos]]
-path = "~/code/another-project"
-```
-
-### Per-repo overrides
-
-Add extra excludes or includes for specific repos:
-
-```toml
-[[repos]]
-path = "~/code/my-project"
-name = "my-project"                # optional, defaults to directory basename
-exclude = ["docs/generated/"]      # merged with global excludes
-include = ["*.tex"]                # also link LaTeX files for this repo
-```
-
-### All config options
-
-```toml
-version = 1                        # required, must be 1
-output_dir = "~/ulysses-link"      # where the symlink tree lives
-debounce_seconds = 0.5             # batch rapid events (0.0–30.0)
-log_level = "INFO"                 # TRACE, DEBUG, INFO, WARNING, ERROR
-global_exclude = ["..."]           # override the default exclude list
-global_include = ["..."]           # override the default include list
-
-[[repos]]                          # one section per repo
-path = "~/code/repo"               # required
-name = "repo"                      # optional, derived from path basename
-exclude = ["..."]                  # merged with global_exclude
-include = ["..."]                  # merged with global_include
-```
-
-Exclude patterns use `.gitignore` syntax. Include patterns use glob syntax.
-
-## What gets linked
-
-By default, ulysses-link includes: `*.md`, `*.mdx`, `*.markdown`, `*.txt`, `*.rst`, `*.adoc`, `*.org`, `README`, `LICENSE`, `CHANGELOG`, `CONTRIBUTING`, `AUTHORS`, `COPYING`, and `TODO`.
-
-It skips: `.git/`, `node_modules/`, `vendor/`, `.venv/`, `dist/`, `build/`, `target/`, `__pycache__/`, `.idea/`, `.vscode/`, `coverage/`, `.DS_Store`, and other common non-documentation directories. All patterns are configurable.
+This opens `~/.config/ulysses-link/config.toml` in your `$EDITOR`.
 
 ## Non-destructive sync
 
@@ -129,6 +81,64 @@ ulysses-link uninstall             Remove background service
 ulysses-link status                Check service status
 ulysses-link version               Print version
 ```
+
+## Config file format
+
+The config file is located at `~/.config/ulysses-link/config.toml`. It is created automatically on the first `sync` and updated by `sync` and `remove`. Tilde (`~`) and environment variables are expanded in all paths.
+
+### Minimal example
+
+```toml
+version = 1
+output_dir = "~/ulysses-link"
+
+[[repos]]
+path = "~/code/my-project"
+```
+
+### Multiple repos with overrides
+
+```toml
+version = 1
+output_dir = "~/ulysses-link"
+
+[[repos]]
+path = "~/code/my-project"
+name = "my-project"                # optional, defaults to directory basename
+exclude = ["docs/generated/"]      # merged with global excludes
+include = ["*.tex"]                # also link LaTeX files for this repo
+
+[[repos]]
+path = "~/code/another-project"
+```
+
+### Global options
+
+| Field | Default | Description |
+|---|---|---|
+| `version` | — | Required. Must be `1`. |
+| `output_dir` | — | Required. Root of the symlink mirror tree. |
+| `debounce_seconds` | `0.5` | Seconds to wait after a burst of filesystem events before syncing. Range: 0.0–30.0. |
+| `log_level` | `"INFO"` | One of `TRACE`, `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
+| `global_exclude` | *(see below)* | Exclude patterns applied to all repos. `.gitignore` syntax. |
+| `global_include` | *(see below)* | Include patterns applied to all repos. Glob syntax. |
+
+### Per-repo options (`[[repos]]`)
+
+| Field | Default | Description |
+|---|---|---|
+| `path` | — | Required. Path to the repository. |
+| `name` | directory basename | Name used for the mirror subdirectory. |
+| `exclude` | `[]` | Additional exclude patterns, merged with `global_exclude`. |
+| `include` | `[]` | Additional include patterns, merged with `global_include`. |
+
+### Default patterns
+
+**Includes:** `*.md`, `*.mdx`, `*.markdown`, `*.txt`, `*.rst`, `*.adoc`, `*.org`, `README`, `LICENSE`, `LICENCE`, `CHANGELOG`, `CONTRIBUTING`, `AUTHORS`, `COPYING`, `TODO`
+
+**Excludes:** `.git/`, `.svn/`, `.hg/`, `node_modules/`, `bower_components/`, `vendor/`, `.pnpm-store/`, `.venv/`, `venv/`, `dist/`, `build/`, `out/`, `target/`, `_build/`, `.next/`, `.nuxt/`, `.svelte-kit/`, `.docusaurus/`, `__pycache__/`, `*.pyc`, `*.pyo`, `.mypy_cache/`, `.pytest_cache/`, `.ruff_cache/`, `.tox/`, `*.egg-info/`, `.idea/`, `.vscode/`, `*.swp`, `*.swo`, `*~`, `.DS_Store`, `Thumbs.db`, `coverage/`, `htmlcov/`, `.nyc_output/`, `.cache/`, `.gradle/`, `.terraform/`
+
+Exclude patterns are checked before includes, so a file like `node_modules/pkg/README.md` stays excluded. Setting `global_exclude` or `global_include` in the config replaces the defaults entirely.
 
 ## Development
 

@@ -2,12 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use tracing::{debug, error, info, warn};
 
-use crate::config::{load_config, Config, RepoConfig};
+use crate::config::{load_config, Config, RepoConfig, RescanInterval};
 use crate::linker;
 use crate::scanner::{full_scan, scan_repo};
 use crate::watcher::{self, RepoWatcher};
@@ -16,6 +16,8 @@ pub struct MirrorEngine {
     config: Config,
     watchers: HashMap<String, RepoWatcher>,
     running: Arc<AtomicBool>,
+    last_scan_at: Instant,
+    last_scan_duration: Duration,
 }
 
 impl MirrorEngine {
@@ -24,6 +26,8 @@ impl MirrorEngine {
             config,
             watchers: HashMap::new(),
             running: Arc::new(AtomicBool::new(false)),
+            last_scan_at: Instant::now(),
+            last_scan_duration: Duration::ZERO,
         }
     }
 
@@ -31,10 +35,17 @@ impl MirrorEngine {
     pub fn start(&mut self) -> Result<()> {
         info!("Starting ulysses-link engine");
 
+        let scan_start = Instant::now();
         let result = full_scan(&self.config);
+        self.last_scan_duration = scan_start.elapsed();
+        self.last_scan_at = Instant::now();
         info!(
-            "Initial scan: {} created, {} existed, {} pruned, {} errors",
-            result.created, result.already_existed, result.pruned, result.errors,
+            "Initial scan: {} created, {} existed, {} pruned, {} errors in {:?}",
+            result.created,
+            result.already_existed,
+            result.pruned,
+            result.errors,
+            self.last_scan_duration,
         );
 
         // Clone repos to avoid borrow conflict
@@ -115,11 +126,13 @@ impl MirrorEngine {
         }
 
         // Added repos
+        let mut repos_changed = false;
         for name in new_names.difference(&old_names) {
             info!("New repo in config: {}", name);
             if let Some(repo_config) = new_repos_by_name.get(name) {
                 scan_repo(repo_config, &new_config.output_dir);
                 self.start_repo_watcher(repo_config);
+                repos_changed = true;
             }
         }
 
@@ -133,10 +146,16 @@ impl MirrorEngine {
                 self.stop_repo_watcher(name);
                 scan_repo(new_rc, &new_config.output_dir);
                 self.start_repo_watcher(new_rc);
+                repos_changed = true;
             }
         }
 
         self.config = new_config;
+
+        // Reset rescan timer when repos were scanned during reload
+        if repos_changed {
+            self.last_scan_at = Instant::now();
+        }
     }
 
     fn start_repo_watcher(&mut self, repo_config: &RepoConfig) {
@@ -171,6 +190,17 @@ impl MirrorEngine {
         }
     }
 
+    fn rescan_interval(&self) -> Option<Duration> {
+        match &self.config.rescan_interval {
+            RescanInterval::Never => None,
+            RescanInterval::Auto => {
+                let computed = self.last_scan_duration * 1000;
+                Some(computed.max(Duration::from_secs(60)))
+            }
+            RescanInterval::Fixed(d) => Some(*d),
+        }
+    }
+
     fn main_loop(&mut self) {
         #[cfg(unix)]
         let mut sighup_signals = {
@@ -188,6 +218,20 @@ impl MirrorEngine {
                         info!("Received SIGHUP, reloading config");
                         self.reload_config();
                     }
+                }
+            }
+
+            if let Some(interval) = self.rescan_interval() {
+                if self.last_scan_at.elapsed() >= interval {
+                    info!("Periodic rescan");
+                    let scan_start = Instant::now();
+                    let result = full_scan(&self.config);
+                    self.last_scan_duration = scan_start.elapsed();
+                    self.last_scan_at = Instant::now();
+                    info!(
+                        "Rescan: {} created, {} pruned in {:?}",
+                        result.created, result.pruned, self.last_scan_duration,
+                    );
                 }
             }
         }

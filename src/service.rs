@@ -472,6 +472,7 @@ mod tests {
             repos: vec![],
             debounce_seconds: 0.5,
             log_level: "INFO".into(),
+            rescan_interval: crate::config::RescanInterval::Auto,
             config_path: Some(tmp.path().join("config.yaml")),
         };
 
@@ -492,6 +493,7 @@ mod tests {
             repos: vec![],
             debounce_seconds: 0.5,
             log_level: "INFO".into(),
+            rescan_interval: crate::config::RescanInterval::Auto,
             config_path: Some(tmp.path().join("config.yaml")),
         };
 

@@ -12,6 +12,11 @@ debounce_seconds = 0.5
 # Logging level: TRACE, DEBUG, INFO, WARNING, ERROR
 log_level = "INFO"
 
+# How often to do a full rescan as a safety net.
+# "auto" (default) scales with scan speed: max(1000 × scan duration, 1 minute).
+# "never" disables periodic rescans. A number sets a fixed interval in seconds.
+# rescan_interval = "auto"
+
 # Global exclude patterns applied to ALL repos (gitignore syntax).
 # These are checked BEFORE includes, so node_modules/*.md stays excluded.
 # Uncomment to override defaults. Default excludes:

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
@@ -108,6 +109,13 @@ pub enum ConfigError {
 // --- Raw TOML schema ---
 
 #[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawRescanInterval {
+    Named(String),
+    Seconds(f64),
+}
+
+#[derive(Debug, Deserialize)]
 struct RawConfig {
     version: Option<u64>,
     output_dir: Option<String>,
@@ -115,6 +123,7 @@ struct RawConfig {
     global_include: Option<Vec<String>>,
     debounce_seconds: Option<f64>,
     log_level: Option<String>,
+    rescan_interval: Option<RawRescanInterval>,
     repos: Option<Vec<RawRepo>>,
 }
 
@@ -139,11 +148,19 @@ pub struct RepoConfig {
 }
 
 #[derive(Debug, Clone)]
+pub enum RescanInterval {
+    Auto,
+    Never,
+    Fixed(Duration),
+}
+
+#[derive(Debug, Clone)]
 pub struct Config {
     pub output_dir: PathBuf,
     pub repos: Vec<RepoConfig>,
     pub debounce_seconds: f64,
     pub log_level: String,
+    pub rescan_interval: RescanInterval,
     pub config_path: Option<PathBuf>,
 }
 
@@ -257,6 +274,26 @@ fn parse_config(raw: RawConfig, config_path: Option<PathBuf>) -> Result<Config, 
         )));
     }
 
+    // Rescan interval
+    let rescan_interval = match raw.rescan_interval {
+        None => RescanInterval::Auto,
+        Some(RawRescanInterval::Named(ref s)) if s == "auto" => RescanInterval::Auto,
+        Some(RawRescanInterval::Named(ref s)) if s == "never" => RescanInterval::Never,
+        Some(RawRescanInterval::Named(ref s)) => {
+            return Err(ConfigError::Validation(format!(
+                "'rescan_interval' must be \"auto\", \"never\", or a positive number, got \"{s}\""
+            )));
+        }
+        Some(RawRescanInterval::Seconds(n)) if n > 0.0 => {
+            RescanInterval::Fixed(Duration::from_secs_f64(n))
+        }
+        Some(RawRescanInterval::Seconds(n)) => {
+            return Err(ConfigError::Validation(format!(
+                "'rescan_interval' must be a positive number of seconds, got {n}"
+            )));
+        }
+    };
+
     // Global patterns
     let global_exclude: Vec<String> = raw.global_exclude.unwrap_or_else(|| {
         DEFAULT_GLOBAL_EXCLUDE
@@ -330,6 +367,7 @@ fn parse_config(raw: RawConfig, config_path: Option<PathBuf>) -> Result<Config, 
         repos,
         debounce_seconds: debounce,
         log_level,
+        rescan_interval,
         config_path,
     })
 }
@@ -429,6 +467,11 @@ debounce_seconds = 0.5
 
 # Logging level: TRACE, DEBUG, INFO, WARNING, ERROR
 log_level = "INFO"
+
+# How often to do a full rescan as a safety net.
+# "auto" (default) scales with scan speed: max(1000 × scan duration, 1 minute).
+# "never" disables periodic rescans. A number sets a fixed interval in seconds.
+# rescan_interval = "auto"
 
 # Global exclude patterns applied to ALL repos (gitignore syntax).
 # These are checked BEFORE includes, so node_modules/*.md stays excluded.
@@ -823,8 +866,17 @@ mod tests {
     #[test]
     fn test_no_config_found() {
         let tmp = TempDir::new().unwrap();
+        // Override HOME so config_search_paths won't find a real config
+        // in ~/.config or ~/Library/Application Support
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", tmp.path());
         let _guard = std::env::set_current_dir(tmp.path());
+
         let err = find_config_path(None);
+
+        if let Some(h) = orig_home {
+            std::env::set_var("HOME", h);
+        }
         assert!(matches!(err, Err(ConfigError::NoConfigFound)));
     }
 
@@ -912,6 +964,102 @@ mod tests {
 
         let removed = remove_repo(&config_path, Path::new("/nonexistent")).unwrap();
         assert!(removed.is_none());
+    }
+
+    #[test]
+    fn test_rescan_interval_default_is_auto() {
+        let tmp = TempDir::new().unwrap();
+        let output_dir = tmp.path().join("output");
+        let config_path = write_config(
+            tmp.path(),
+            &format!("version = 1\noutput_dir = \"{}\"", output_dir.display()),
+        );
+
+        let config = load_config(Some(&config_path)).unwrap();
+        assert!(matches!(config.rescan_interval, RescanInterval::Auto));
+    }
+
+    #[test]
+    fn test_rescan_interval_auto() {
+        let tmp = TempDir::new().unwrap();
+        let output_dir = tmp.path().join("output");
+        let config_path = write_config(
+            tmp.path(),
+            &format!(
+                "version = 1\noutput_dir = \"{}\"\nrescan_interval = \"auto\"",
+                output_dir.display()
+            ),
+        );
+
+        let config = load_config(Some(&config_path)).unwrap();
+        assert!(matches!(config.rescan_interval, RescanInterval::Auto));
+    }
+
+    #[test]
+    fn test_rescan_interval_never() {
+        let tmp = TempDir::new().unwrap();
+        let output_dir = tmp.path().join("output");
+        let config_path = write_config(
+            tmp.path(),
+            &format!(
+                "version = 1\noutput_dir = \"{}\"\nrescan_interval = \"never\"",
+                output_dir.display()
+            ),
+        );
+
+        let config = load_config(Some(&config_path)).unwrap();
+        assert!(matches!(config.rescan_interval, RescanInterval::Never));
+    }
+
+    #[test]
+    fn test_rescan_interval_fixed_seconds() {
+        let tmp = TempDir::new().unwrap();
+        let output_dir = tmp.path().join("output");
+        let config_path = write_config(
+            tmp.path(),
+            &format!(
+                "version = 1\noutput_dir = \"{}\"\nrescan_interval = 300",
+                output_dir.display()
+            ),
+        );
+
+        let config = load_config(Some(&config_path)).unwrap();
+        match config.rescan_interval {
+            RescanInterval::Fixed(d) => assert_eq!(d, Duration::from_secs(300)),
+            other => panic!("Expected Fixed(300s), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_rescan_interval_invalid_string() {
+        let tmp = TempDir::new().unwrap();
+        let output_dir = tmp.path().join("output");
+        let config_path = write_config(
+            tmp.path(),
+            &format!(
+                "version = 1\noutput_dir = \"{}\"\nrescan_interval = \"hourly\"",
+                output_dir.display()
+            ),
+        );
+
+        let err = load_config(Some(&config_path)).unwrap_err();
+        assert!(err.to_string().contains("rescan_interval"));
+    }
+
+    #[test]
+    fn test_rescan_interval_negative_number() {
+        let tmp = TempDir::new().unwrap();
+        let output_dir = tmp.path().join("output");
+        let config_path = write_config(
+            tmp.path(),
+            &format!(
+                "version = 1\noutput_dir = \"{}\"\nrescan_interval = -10",
+                output_dir.display()
+            ),
+        );
+
+        let err = load_config(Some(&config_path)).unwrap_err();
+        assert!(err.to_string().contains("rescan_interval"));
     }
 
     #[test]

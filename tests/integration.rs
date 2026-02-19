@@ -62,11 +62,8 @@ fn test_end_to_end_scan() {
     fs::write(repo2.join(".venv").join("readme.md"), "venv").unwrap();
 
     // Create config
-    let config_path_str = create_test_config(
-        &[repo1.as_path(), repo2.as_path()],
-        &output,
-        tmp.path(),
-    );
+    let config_path_str =
+        create_test_config(&[repo1.as_path(), repo2.as_path()], &output, tmp.path());
 
     // Load and scan
     let config_path = std::path::PathBuf::from(&config_path_str);
@@ -74,13 +71,25 @@ fn test_end_to_end_scan() {
     let result = ulysses_link::scanner::full_scan(&config);
 
     // Verify results
-    assert!(result.errors == 0, "Expected no errors, got {}", result.errors);
+    assert!(
+        result.errors == 0,
+        "Expected no errors, got {}",
+        result.errors
+    );
     assert!(result.created > 0, "Expected some files created");
 
     // Verify correct symlinks exist
     assert!(output.join("repo1").join("README.md").is_symlink());
-    assert!(output.join("repo1").join("docs").join("guide.md").is_symlink());
-    assert!(output.join("repo1").join("docs").join("api.txt").is_symlink());
+    assert!(output
+        .join("repo1")
+        .join("docs")
+        .join("guide.md")
+        .is_symlink());
+    assert!(output
+        .join("repo1")
+        .join("docs")
+        .join("api.txt")
+        .is_symlink());
     assert!(output.join("repo1").join("LICENSE").is_symlink());
     assert!(output.join("repo2").join("README.md").is_symlink());
     assert!(output.join("repo2").join("CHANGELOG").is_symlink());
@@ -106,7 +115,10 @@ fn test_end_to_end_scan() {
     // Run scan again — should be idempotent
     let result2 = ulysses_link::scanner::full_scan(&config);
     assert_eq!(result2.created, 0, "Second scan should create nothing");
-    assert_eq!(result2.already_existed, result.created, "All should already exist");
+    assert_eq!(
+        result2.already_existed, result.created,
+        "All should already exist"
+    );
 
     // Delete a source file and re-scan — should prune
     fs::remove_file(repo1.join("docs").join("guide.md")).unwrap();
@@ -129,11 +141,8 @@ fn test_repo_name_collision_in_mirror() {
     fs::write(repo1.join("README.md"), "repo 1").unwrap();
     fs::write(repo2.join("README.md"), "repo 2").unwrap();
 
-    let config_path_str = create_test_config(
-        &[repo1.as_path(), repo2.as_path()],
-        &output,
-        tmp.path(),
-    );
+    let config_path_str =
+        create_test_config(&[repo1.as_path(), repo2.as_path()], &output, tmp.path());
 
     let config_path = std::path::PathBuf::from(&config_path_str);
     let config = ulysses_link::config::load_config(Some(&config_path)).unwrap();

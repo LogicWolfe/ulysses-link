@@ -42,7 +42,10 @@ pub fn scan_repo(repo_config: &RepoConfig, output_dir: &Path) -> ScanResult {
     let repo_path = &repo_config.path;
 
     if !repo_path.is_dir() {
-        warn!("Repo path does not exist, skipping: {}", repo_path.display());
+        warn!(
+            "Repo path does not exist, skipping: {}",
+            repo_path.display()
+        );
         return result;
     }
 
@@ -55,10 +58,7 @@ pub fn scan_repo(repo_config: &RepoConfig, output_dir: &Path) -> ScanResult {
                 return true;
             }
 
-            let rel_path = entry
-                .path()
-                .strip_prefix(repo_path)
-                .unwrap_or(entry.path());
+            let rel_path = entry.path().strip_prefix(repo_path).unwrap_or(entry.path());
             let rel_str = rel_path.to_string_lossy();
 
             if entry.file_type().is_dir() {
@@ -101,18 +101,18 @@ pub fn scan_repo(repo_config: &RepoConfig, output_dir: &Path) -> ScanResult {
     match linker::prune_stale(&repo_config.name, output_dir) {
         Ok(pruned) => result.pruned = pruned,
         Err(e) => {
-            tracing::error!("Failed to prune stale symlinks for {}: {}", repo_config.name, e);
+            tracing::error!(
+                "Failed to prune stale symlinks for {}: {}",
+                repo_config.name,
+                e
+            );
             result.errors += 1;
         }
     }
 
     info!(
         "Scan complete for {}: {} created, {} existed, {} pruned, {} errors",
-        repo_config.name,
-        result.created,
-        result.already_existed,
-        result.pruned,
-        result.errors,
+        repo_config.name, result.created, result.already_existed, result.pruned, result.errors,
     );
 
     result
@@ -154,7 +154,11 @@ mod tests {
         assert_eq!(result.created, 2);
         assert_eq!(result.errors, 0);
         assert!(output.join("my-repo").join("README.md").is_symlink());
-        assert!(output.join("my-repo").join("docs").join("guide.md").is_symlink());
+        assert!(output
+            .join("my-repo")
+            .join("docs")
+            .join("guide.md")
+            .is_symlink());
         assert!(!output.join("my-repo").join("main.rs").exists());
     }
 
@@ -167,7 +171,11 @@ mod tests {
 
         fs::create_dir(repo.join("node_modules")).unwrap();
         fs::create_dir(repo.join("node_modules").join("pkg")).unwrap();
-        fs::write(repo.join("node_modules").join("pkg").join("README.md"), "npm").unwrap();
+        fs::write(
+            repo.join("node_modules").join("pkg").join("README.md"),
+            "npm",
+        )
+        .unwrap();
         fs::write(repo.join("README.md"), "root").unwrap();
 
         let config = make_config(&repo, &output);

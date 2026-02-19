@@ -259,13 +259,22 @@ fn parse_config(raw: RawConfig, config_path: Option<PathBuf>) -> Result<Config, 
 
     // Global patterns
     let global_exclude: Vec<String> = raw.global_exclude.unwrap_or_else(|| {
-        DEFAULT_GLOBAL_EXCLUDE.iter().map(|s| s.to_string()).collect()
+        DEFAULT_GLOBAL_EXCLUDE
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     });
     let global_include: Vec<String> = raw.global_include.unwrap_or_else(|| {
-        DEFAULT_GLOBAL_INCLUDE.iter().map(|s| s.to_string()).collect()
+        DEFAULT_GLOBAL_INCLUDE
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     });
     let global_include = if global_include.is_empty() {
-        DEFAULT_GLOBAL_INCLUDE.iter().map(|s| s.to_string()).collect()
+        DEFAULT_GLOBAL_INCLUDE
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     } else {
         global_include
     };
@@ -293,8 +302,16 @@ fn parse_config(raw: RawConfig, config_path: Option<PathBuf>) -> Result<Config, 
         let repo_exclude: Vec<String> = repo_raw.exclude.clone().unwrap_or_default();
         let repo_include: Vec<String> = repo_raw.include.clone().unwrap_or_default();
 
-        let all_exclude: Vec<String> = global_exclude.iter().chain(repo_exclude.iter()).cloned().collect();
-        let all_include: Vec<String> = global_include.iter().chain(repo_include.iter()).cloned().collect();
+        let all_exclude: Vec<String> = global_exclude
+            .iter()
+            .chain(repo_exclude.iter())
+            .cloned()
+            .collect();
+        let all_include: Vec<String> = global_include
+            .iter()
+            .chain(repo_include.iter())
+            .cloned()
+            .collect();
 
         let exclude = compile_exclude(&all_exclude, &path)?;
         let include = compile_include(&all_include)?;
@@ -352,9 +369,9 @@ fn resolve_repo_names(repos: &[RawRepo]) -> Result<Vec<(&RawRepo, PathBuf, Strin
 fn compile_exclude(patterns: &[String], repo_path: &Path) -> Result<Gitignore, ConfigError> {
     let mut builder = GitignoreBuilder::new(repo_path);
     for pattern in patterns {
-        builder
-            .add_line(None, pattern)
-            .map_err(|e| ConfigError::Validation(format!("Invalid exclude pattern '{pattern}': {e}")))?;
+        builder.add_line(None, pattern).map_err(|e| {
+            ConfigError::Validation(format!("Invalid exclude pattern '{pattern}': {e}"))
+        })?;
     }
     builder
         .build()
@@ -371,8 +388,9 @@ fn compile_include(patterns: &[String]) -> Result<GlobSet, ConfigError> {
         } else {
             pattern.clone()
         };
-        let glob = Glob::new(&glob_pattern)
-            .map_err(|e| ConfigError::Validation(format!("Invalid include pattern '{pattern}': {e}")))?;
+        let glob = Glob::new(&glob_pattern).map_err(|e| {
+            ConfigError::Validation(format!("Invalid include pattern '{pattern}': {e}"))
+        })?;
         builder.add(glob);
     }
     builder
@@ -481,7 +499,10 @@ pub fn remove_repo(config_path: &Path, repo_path: &Path) -> Result<Option<String
 
     let mut removed_name = None;
 
-    if let Some(repos) = doc.get_mut("repos").and_then(|v| v.as_array_of_tables_mut()) {
+    if let Some(repos) = doc
+        .get_mut("repos")
+        .and_then(|v| v.as_array_of_tables_mut())
+    {
         let mut remove_idx = None;
         for (i, repo) in repos.iter().enumerate() {
             if let Some(path) = repo.get("path").and_then(|v| v.as_str()) {
@@ -571,18 +592,14 @@ pub fn open_in_editor(path: &Path) -> Result<(), ConfigError> {
                     .arg("-t")
                     .arg(path)
                     .status()
-                    .map_err(|e| {
-                        ConfigError::Validation(format!("Failed to open file: {e}"))
-                    })?
+                    .map_err(|e| ConfigError::Validation(format!("Failed to open file: {e}")))?
             }
             #[cfg(target_os = "linux")]
             {
                 std::process::Command::new("xdg-open")
                     .arg(path)
                     .status()
-                    .map_err(|e| {
-                        ConfigError::Validation(format!("Failed to open file: {e}"))
-                    })?
+                    .map_err(|e| ConfigError::Validation(format!("Failed to open file: {e}")))?
             }
             #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             {
@@ -594,7 +611,9 @@ pub fn open_in_editor(path: &Path) -> Result<(), ConfigError> {
     };
 
     if !status.success() {
-        return Err(ConfigError::Validation("Editor exited with an error".into()));
+        return Err(ConfigError::Validation(
+            "Editor exited with an error".into(),
+        ));
     }
 
     Ok(())
@@ -774,8 +793,12 @@ mod tests {
 
         let config = load_config(Some(&config_path)).unwrap();
         assert_eq!(config.repos.len(), 1);
-        assert!(config.repos[0].include_patterns.contains(&"*.md".to_string()));
-        assert!(config.repos[0].include_patterns.contains(&"*.rst".to_string()));
+        assert!(config.repos[0]
+            .include_patterns
+            .contains(&"*.md".to_string()));
+        assert!(config.repos[0]
+            .include_patterns
+            .contains(&"*.rst".to_string()));
     }
 
     #[test]

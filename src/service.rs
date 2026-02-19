@@ -146,7 +146,11 @@ pub fn send_reload_signal() -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let output = Command::new("launchctl")
-            .args(["kill", "SIGHUP", &format!("gui/{}/{LAUNCHD_LABEL}", unsafe { libc::getuid() })])
+            .args([
+                "kill",
+                "SIGHUP",
+                &format!("gui/{}/{LAUNCHD_LABEL}", unsafe { libc::getuid() }),
+            ])
             .output()
             .context("Failed to send SIGHUP via launchctl")?;
         if !output.status.success() {

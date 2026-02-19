@@ -5,7 +5,9 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::Result;
-use notify::{Config as NotifyConfig, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{
+    Config as NotifyConfig, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
+};
 use tracing::{debug, error, info};
 use walkdir::WalkDir;
 
@@ -68,11 +70,9 @@ pub fn create_watcher(
 
     // Create the notify watcher
     let mut watcher = RecommendedWatcher::new(
-        move |result: Result<Event, notify::Error>| {
-            match result {
-                Ok(event) => handle_raw_event(&event, &repo_path, &pending_clone),
-                Err(e) => error!("Watch error: {}", e),
-            }
+        move |result: Result<Event, notify::Error>| match result {
+            Ok(event) => handle_raw_event(&event, &repo_path, &pending_clone),
+            Err(e) => error!("Watch error: {}", e),
         },
         NotifyConfig::default(),
     )?;
@@ -238,13 +238,11 @@ fn flush_events(
 
     for (rel_path, event_type) in &batch {
         match event_type {
-            EventType::Deleted => {
-                match linker::remove_symlink(repo_name, rel_path, output_dir) {
-                    Ok(true) => deletes += 1,
-                    Ok(false) => {}
-                    Err(e) => error!("Error removing symlink for {}: {}", rel_path, e),
-                }
-            }
+            EventType::Deleted => match linker::remove_symlink(repo_name, rel_path, output_dir) {
+                Ok(true) => deletes += 1,
+                Ok(false) => {}
+                Err(e) => error!("Error removing symlink for {}: {}", rel_path, e),
+            },
             EventType::Created => {
                 if matcher::should_mirror(rel_path, exclude, include) {
                     match linker::ensure_symlink(repo_path, repo_name, rel_path, output_dir) {
@@ -263,14 +261,25 @@ fn flush_events(
             EventType::DirCreated => {
                 let abs_dir = repo_path.join(rel_path);
                 if abs_dir.is_dir() {
-                    scan_new_dir(&abs_dir, repo_path, repo_name, output_dir, exclude, include, &mut creates);
+                    scan_new_dir(
+                        &abs_dir,
+                        repo_path,
+                        repo_name,
+                        output_dir,
+                        exclude,
+                        include,
+                        &mut creates,
+                    );
                 }
             }
         }
     }
 
     if creates > 0 || deletes > 0 {
-        info!("Batch for {}: {} creates, {} deletes", repo_name, creates, deletes);
+        info!(
+            "Batch for {}: {} creates, {} deletes",
+            repo_name, creates, deletes
+        );
     }
 }
 

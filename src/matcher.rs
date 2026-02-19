@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use ignore::gitignore::Gitignore;
 use globset::GlobSet;
+use ignore::gitignore::Gitignore;
 
 /// Check if a file should be mirrored based on exclude/include patterns.
 ///
@@ -115,7 +115,11 @@ mod tests {
         let exc = default_exclude();
         let inc = default_include();
         assert!(!should_mirror("node_modules/package/README.md", &exc, &inc));
-        assert!(!should_mirror("node_modules/deep/nested/doc.md", &exc, &inc));
+        assert!(!should_mirror(
+            "node_modules/deep/nested/doc.md",
+            &exc,
+            &inc
+        ));
     }
 
     #[test]

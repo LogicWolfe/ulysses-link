@@ -95,10 +95,8 @@ impl MirrorEngine {
             }
         };
 
-        let old_names: HashSet<String> =
-            self.config.repos.iter().map(|r| r.name.clone()).collect();
-        let new_names: HashSet<String> =
-            new_config.repos.iter().map(|r| r.name.clone()).collect();
+        let old_names: HashSet<String> = self.config.repos.iter().map(|r| r.name.clone()).collect();
+        let new_names: HashSet<String> = new_config.repos.iter().map(|r| r.name.clone()).collect();
 
         // Clone the data we need to avoid borrow issues
         let new_repos: Vec<RepoConfig> = new_config.repos.clone();

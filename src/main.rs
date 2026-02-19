@@ -144,7 +144,9 @@ fn cmd_sync(path: Option<PathBuf>, config_arg: Option<PathBuf>) {
         let cfg = match config::load_config(config_arg.as_deref()) {
             Ok(c) => c,
             Err(config::ConfigError::NoConfigFound) => {
-                eprintln!("No config file found. Run 'ulysses-link sync <path>' to add a repo first.");
+                eprintln!(
+                    "No config file found. Run 'ulysses-link sync <path>' to add a repo first."
+                );
                 std::process::exit(1);
             }
             Err(e) => {

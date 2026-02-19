@@ -21,8 +21,9 @@ pub fn ensure_symlink(
             (Ok(t), Ok(s)) if t == s => return Ok(false),
             _ => {
                 // Points somewhere wrong or broken, fix it
-                fs::remove_file(&target)
-                    .with_context(|| format!("Failed to remove wrong symlink {}", target.display()))?;
+                fs::remove_file(&target).with_context(|| {
+                    format!("Failed to remove wrong symlink {}", target.display())
+                })?;
             }
         }
     }
@@ -54,17 +55,17 @@ pub fn ensure_symlink(
         })?;
     }
 
-    debug!("Created symlink: {} -> {}", target.display(), source.display());
+    debug!(
+        "Created symlink: {} -> {}",
+        target.display(),
+        source.display()
+    );
     Ok(true)
 }
 
 /// Remove a symlink. Only removes if it IS a symlink (safety check).
 /// Returns true if a symlink was removed.
-pub fn remove_symlink(
-    repo_name: &str,
-    rel_path: &str,
-    output_dir: &Path,
-) -> Result<bool> {
+pub fn remove_symlink(repo_name: &str, rel_path: &str, output_dir: &Path) -> Result<bool> {
     let target = output_dir.join(repo_name).join(rel_path);
 
     if !target.is_symlink() {
@@ -93,7 +94,10 @@ pub fn prune_stale(repo_name: &str, output_dir: &Path) -> Result<u32> {
 
     let mut pruned = 0u32;
 
-    for entry in WalkDir::new(&mirror_root).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(&mirror_root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         let path = entry.path();
         if path.is_symlink() {
             // Check if target exists by trying to read the symlink target
@@ -157,11 +161,7 @@ pub fn remove_repo_mirror(repo_name: &str, output_dir: &Path) -> Result<()> {
 
 /// Remove all symlinks under a mirror directory (for dir_deleted events).
 /// Returns the count of removed symlinks.
-pub fn remove_dir_symlinks(
-    repo_name: &str,
-    dir_rel_path: &str,
-    output_dir: &Path,
-) -> Result<u32> {
+pub fn remove_dir_symlinks(repo_name: &str, dir_rel_path: &str, output_dir: &Path) -> Result<u32> {
     let mirror_dir = output_dir.join(repo_name).join(dir_rel_path);
     if !mirror_dir.exists() {
         return Ok(0);
@@ -298,7 +298,12 @@ mod tests {
 
         ensure_symlink(repo.path(), "my-repo", "deep/nested/doc.md", output.path()).unwrap();
 
-        let link = output.path().join("my-repo").join("deep").join("nested").join("doc.md");
+        let link = output
+            .path()
+            .join("my-repo")
+            .join("deep")
+            .join("nested")
+            .join("doc.md");
         assert!(link.is_symlink());
     }
 
@@ -379,7 +384,12 @@ mod tests {
         remove_symlink("my-repo", "deep/nested/doc.md", output.path()).unwrap();
 
         // Empty parent directories should be cleaned up
-        assert!(!output.path().join("my-repo").join("deep").join("nested").exists());
+        assert!(!output
+            .path()
+            .join("my-repo")
+            .join("deep")
+            .join("nested")
+            .exists());
         assert!(!output.path().join("my-repo").join("deep").exists());
     }
 }

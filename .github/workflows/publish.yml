@@ -31,7 +31,7 @@ jobs:
         id: version
         run: |
           CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          PUBLISHED=$(curl -s https://crates.io/api/v1/crates/ulysses-link | jq -r '.crate.max_version // empty' 2>/dev/null || echo "0.0.0")
+          PUBLISHED=$(curl -sf https://crates.io/api/v1/crates/ulysses-link | sed -n 's/.*"max_version":"\([^"]*\)".*/\1/p')
 
           if [ -z "$PUBLISHED" ]; then
             PUBLISHED="0.0.0"

@@ -330,13 +330,13 @@ mod tests {
         fs::create_dir_all(&repo).unwrap();
         fs::create_dir_all(&output).unwrap();
 
-        let yaml = format!(
-            "version: 1\noutput_dir: {}\nrepos:\n  - path: {}",
+        let toml = format!(
+            "version = 1\noutput_dir = \"{}\"\n\n[[repos]]\npath = \"{}\"",
             output.display(),
             repo.display()
         );
-        let config_file = tmp.path().join("config.yaml");
-        fs::write(&config_file, yaml).unwrap();
+        let config_file = tmp.path().join("config.toml");
+        fs::write(&config_file, toml).unwrap();
         let cfg = config::load_config(Some(&config_file)).unwrap();
         let repo_config = &cfg.repos[0];
 

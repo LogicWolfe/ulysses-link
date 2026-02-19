@@ -89,7 +89,7 @@ pub const DEFAULT_LOG_LEVEL: &str = "INFO";
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("No config file found. Create one at ~/.config/doc-link/config.yaml or pass --config PATH.")]
+    #[error("No config file found. Create one at ~/.config/doc-link/config.toml or pass --config PATH.")]
     NoConfigFound,
 
     #[error("Config file not found: {0}")]
@@ -101,15 +101,15 @@ pub enum ConfigError {
     #[error("Failed to read config: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("Failed to parse YAML: {0}")]
-    Yaml(#[from] serde_yaml::Error),
+    #[error("Failed to parse TOML: {0}")]
+    Toml(#[from] toml::de::Error),
 }
 
-// --- Raw YAML schema ---
+// --- Raw TOML schema ---
 
 #[derive(Debug, Deserialize)]
 struct RawConfig {
-    version: Option<serde_yaml::Value>,
+    version: Option<u64>,
     output_dir: Option<String>,
     global_exclude: Option<Vec<String>>,
     global_include: Option<Vec<String>>,
@@ -150,10 +150,10 @@ pub struct Config {
 // --- Config search ---
 
 pub fn config_search_paths() -> Vec<PathBuf> {
-    let mut paths = vec![PathBuf::from("./doc-link.yaml")];
+    let mut paths = vec![PathBuf::from("./doc-link.toml")];
 
     if let Some(config_dir) = dirs::config_dir() {
-        paths.push(config_dir.join("doc-link").join("config.yaml"));
+        paths.push(config_dir.join("doc-link").join("config.toml"));
     }
 
     #[cfg(target_os = "macos")]
@@ -162,7 +162,7 @@ pub fn config_search_paths() -> Vec<PathBuf> {
             home.join("Library")
                 .join("Application Support")
                 .join("doc-link")
-                .join("config.yaml"),
+                .join("config.toml"),
         );
     }
 
@@ -215,14 +215,14 @@ fn dunce_canonicalize_or_absolute(path: &Path) -> PathBuf {
 pub fn load_config(config_path: Option<&Path>) -> Result<Config, ConfigError> {
     let resolved = find_config_path(config_path)?;
     let contents = std::fs::read_to_string(&resolved)?;
-    let raw: RawConfig = serde_yaml::from_str(&contents)?;
+    let raw: RawConfig = toml::from_str(&contents)?;
     parse_config(raw, Some(resolved))
 }
 
 fn parse_config(raw: RawConfig, config_path: Option<PathBuf>) -> Result<Config, ConfigError> {
     // Version check
-    match &raw.version {
-        Some(serde_yaml::Value::Number(n)) if n.as_u64() == Some(1) => {}
+    match raw.version {
+        Some(1) => {}
         other => {
             return Err(ConfigError::Validation(format!(
                 "Config version must be 1, got {other:?}"
@@ -394,52 +394,40 @@ pub fn default_config_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("~/.config"))
         .join("doc-link")
-        .join("config.yaml")
+        .join("config.toml")
 }
 
 const DEFAULT_CONFIG_CONTENT: &str = r#"# doc-link configuration
-version: 1
+version = 1
 
 # Where the symlink mirror tree is rooted.
 # Tilde and env vars are expanded.
-output_dir: ~/doc-link
+output_dir = "~/doc-link"
+
+# Debounce window in seconds for filesystem events.
+# After a burst of events (e.g. git pull), wait this long before syncing.
+debounce_seconds = 0.5
+
+# Logging level: TRACE, DEBUG, INFO, WARNING, ERROR
+log_level = "INFO"
 
 # Global exclude patterns applied to ALL repos (gitignore syntax).
 # These are checked BEFORE includes, so node_modules/*.md stays excluded.
 # Uncomment to override defaults (version control dirs, node_modules,
 # build output, IDE files, OS files, etc. are excluded by default).
-# global_exclude:
-#   - .git/
-#   - node_modules/
+# global_exclude = [".git/", "node_modules/"]
 
 # Global include patterns — files matching these are mirrored.
 # Uncomment to override defaults (*.md, *.mdx, *.markdown, *.txt, *.rst,
 # *.adoc, *.org, README, LICENSE, CHANGELOG, etc. are included by default).
-# global_include:
-#   - "*.md"
-#   - "*.mdx"
-
-# Debounce window in seconds for filesystem events.
-# After a burst of events (e.g. git pull), wait this long before syncing.
-debounce_seconds: 0.5
-
-# Logging level: TRACE, DEBUG, INFO, WARNING, ERROR
-log_level: INFO
+# global_include = ["*.md", "*.mdx"]
 
 # Per-repo definitions
-repos: []
-  # - path: ~/code/my-project
-  #   # Optional: override the name used in the mirror tree.
-  #   # Defaults to the directory basename.
-  #   name: my-project
-  #
-  #   # Per-repo additional excludes (merged with global_exclude).
-  #   exclude:
-  #     - docs/generated/
-  #
-  #   # Per-repo additional includes (merged with global_include).
-  #   include:
-  #     - "*.tex"
+# [[repos]]
+# path = "~/code/my-project"
+# name = "my-project"           # optional, defaults to directory basename
+# exclude = ["docs/generated/"] # merged with global_exclude
+# include = ["*.tex"]           # merged with global_include
 "#;
 
 #[cfg(test)]
@@ -449,7 +437,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn write_config(dir: &Path, content: &str) -> PathBuf {
-        let path = dir.join("doc-link.yaml");
+        let path = dir.join("doc-link.toml");
         fs::write(&path, content).unwrap();
         path
     }
@@ -464,7 +452,7 @@ mod tests {
         let config_path = write_config(
             tmp.path(),
             &format!(
-                "version: 1\noutput_dir: {}\nrepos:\n  - path: {}",
+                "version = 1\noutput_dir = \"{}\"\n\n[[repos]]\npath = \"{}\"",
                 output_dir.display(),
                 repo_dir.display()
             ),
@@ -480,7 +468,7 @@ mod tests {
     #[test]
     fn test_missing_version() {
         let tmp = TempDir::new().unwrap();
-        let config_path = write_config(tmp.path(), "output_dir: /tmp/out\nrepos: []");
+        let config_path = write_config(tmp.path(), "output_dir = \"/tmp/out\"");
 
         let err = load_config(Some(&config_path)).unwrap_err();
         assert!(err.to_string().contains("version must be 1"));
@@ -489,7 +477,7 @@ mod tests {
     #[test]
     fn test_wrong_version() {
         let tmp = TempDir::new().unwrap();
-        let config_path = write_config(tmp.path(), "version: 2\noutput_dir: /tmp/out\nrepos: []");
+        let config_path = write_config(tmp.path(), "version = 2\noutput_dir = \"/tmp/out\"");
 
         let err = load_config(Some(&config_path)).unwrap_err();
         assert!(err.to_string().contains("version must be 1"));
@@ -498,7 +486,7 @@ mod tests {
     #[test]
     fn test_missing_output_dir() {
         let tmp = TempDir::new().unwrap();
-        let config_path = write_config(tmp.path(), "version: 1\nrepos: []");
+        let config_path = write_config(tmp.path(), "version = 1");
 
         let err = load_config(Some(&config_path)).unwrap_err();
         assert!(err.to_string().contains("output_dir"));
@@ -511,7 +499,7 @@ mod tests {
         let config_path = write_config(
             tmp.path(),
             &format!(
-                "version: 1\noutput_dir: {}\ndebounce_seconds: 50.0\nrepos: []",
+                "version = 1\noutput_dir = \"{}\"\ndebounce_seconds = 50.0",
                 output_dir.display()
             ),
         );
@@ -527,7 +515,7 @@ mod tests {
         let config_path = write_config(
             tmp.path(),
             &format!(
-                "version: 1\noutput_dir: {}\nlog_level: VERBOSE\nrepos: []",
+                "version = 1\noutput_dir = \"{}\"\nlog_level = \"VERBOSE\"",
                 output_dir.display()
             ),
         );
@@ -548,7 +536,7 @@ mod tests {
         let config_path = write_config(
             tmp.path(),
             &format!(
-                "version: 1\noutput_dir: {}\nrepos:\n  - path: {}\n  - path: {}",
+                "version = 1\noutput_dir = \"{}\"\n\n[[repos]]\npath = \"{}\"\n\n[[repos]]\npath = \"{}\"",
                 output_dir.display(),
                 repo1.display(),
                 repo2.display()
@@ -571,7 +559,7 @@ mod tests {
         let config_path = write_config(
             tmp.path(),
             &format!(
-                "version: 1\noutput_dir: {}\nrepos:\n  - path: {}",
+                "version = 1\noutput_dir = \"{}\"\n\n[[repos]]\npath = \"{}\"",
                 output_dir.display(),
                 repo_dir.display()
             ),
@@ -589,7 +577,7 @@ mod tests {
         let config_path = write_config(
             tmp.path(),
             &format!(
-                "version: 1\noutput_dir: {}\nrepos:\n  - path: /nonexistent/repo/path",
+                "version = 1\noutput_dir = \"{}\"\n\n[[repos]]\npath = \"/nonexistent/repo/path\"",
                 output_dir.display()
             ),
         );
@@ -608,18 +596,7 @@ mod tests {
         let config_path = write_config(
             tmp.path(),
             &format!(
-                r#"version: 1
-output_dir: {}
-global_exclude:
-  - .git/
-global_include:
-  - "*.md"
-repos:
-  - path: {}
-    exclude:
-      - vendor/
-    include:
-      - "*.rst""#,
+                "version = 1\noutput_dir = \"{}\"\nglobal_exclude = [\".git/\"]\nglobal_include = [\"*.md\"]\n\n[[repos]]\npath = \"{}\"\nexclude = [\"vendor/\"]\ninclude = [\"*.rst\"]",
                 output_dir.display(),
                 repo_dir.display()
             ),
@@ -627,7 +604,6 @@ repos:
 
         let config = load_config(Some(&config_path)).unwrap();
         assert_eq!(config.repos.len(), 1);
-        // Should have both global and per-repo include patterns
         assert!(config.repos[0].include_patterns.contains(&"*.md".to_string()));
         assert!(config.repos[0].include_patterns.contains(&"*.rst".to_string()));
     }
@@ -635,25 +611,24 @@ repos:
     #[test]
     fn test_generate_default_config() {
         let tmp = TempDir::new().unwrap();
-        let config_path = tmp.path().join("subdir").join("config.yaml");
+        let config_path = tmp.path().join("subdir").join("config.toml");
 
         generate_default_config(&config_path).unwrap();
         assert!(config_path.exists());
 
         let content = fs::read_to_string(&config_path).unwrap();
-        assert!(content.contains("version: 1"));
-        assert!(content.contains("output_dir:"));
+        assert!(content.contains("version = 1"));
+        assert!(content.contains("output_dir"));
     }
 
     #[test]
     fn test_explicit_config_not_found() {
-        let err = find_config_path(Some(Path::new("/nonexistent/config.yaml"))).unwrap_err();
+        let err = find_config_path(Some(Path::new("/nonexistent/config.toml"))).unwrap_err();
         assert!(matches!(err, ConfigError::FileNotFound(_)));
     }
 
     #[test]
     fn test_no_config_found() {
-        // Run in a temp dir with no config files
         let tmp = TempDir::new().unwrap();
         let _guard = std::env::set_current_dir(tmp.path());
         let err = find_config_path(None);

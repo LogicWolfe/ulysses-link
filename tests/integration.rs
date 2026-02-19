@@ -3,21 +3,21 @@ use std::path::Path;
 
 use tempfile::TempDir;
 
-/// Helper to write a config file and load it.
+/// Helper to write a TOML config file and return its path.
 fn create_test_config(repo_paths: &[&Path], output_dir: &Path, config_dir: &Path) -> String {
-    let repos_yaml: String = repo_paths
+    let repos_toml: String = repo_paths
         .iter()
-        .map(|p| format!("  - path: {}", p.display()))
+        .map(|p| format!("[[repos]]\npath = \"{}\"", p.display()))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n\n");
 
     let config_content = format!(
-        "version: 1\noutput_dir: {}\nrepos:\n{}",
+        "version = 1\noutput_dir = \"{}\"\n\n{}",
         output_dir.display(),
-        repos_yaml
+        repos_toml
     );
 
-    let config_path = config_dir.join("doc-link.yaml");
+    let config_path = config_dir.join("doc-link.toml");
     fs::write(&config_path, &config_content).unwrap();
     config_path.to_string_lossy().to_string()
 }

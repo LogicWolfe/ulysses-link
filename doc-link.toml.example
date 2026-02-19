@@ -1,0 +1,45 @@
+# doc-link configuration
+version = 1
+
+# Where the symlink mirror tree is rooted.
+# Tilde and env vars are expanded.
+output_dir = "~/doc-link"
+
+# Debounce window in seconds for filesystem events.
+# After a burst of events (e.g. git pull), wait this long before syncing.
+debounce_seconds = 0.5
+
+# Logging level: TRACE, DEBUG, INFO, WARNING, ERROR
+log_level = "INFO"
+
+# Global exclude patterns applied to ALL repos (gitignore syntax).
+# These are checked BEFORE includes, so node_modules/*.md stays excluded.
+# Uncomment to override defaults. Default excludes:
+#   .git/, .svn/, .hg/, node_modules/, bower_components/, vendor/,
+#   .pnpm-store/, .venv/, venv/, dist/, build/, out/, target/, _build/,
+#   .next/, .nuxt/, .svelte-kit/, .docusaurus/, __pycache__/, *.pyc,
+#   *.pyo, .mypy_cache/, .pytest_cache/, .ruff_cache/, .tox/,
+#   *.egg-info/, .idea/, .vscode/, *.swp, *.swo, *~, .DS_Store,
+#   Thumbs.db, coverage/, htmlcov/, .nyc_output/, .cache/, .gradle/,
+#   .terraform/
+#
+# global_exclude = [".git/", "node_modules/"]
+
+# Global include patterns — files matching these are mirrored.
+# Uncomment to override defaults. Default includes:
+#   *.md, *.mdx, *.markdown, *.txt, *.rst, *.adoc, *.org,
+#   README, LICENSE, LICENCE, CHANGELOG, CONTRIBUTING, AUTHORS,
+#   COPYING, TODO
+#
+# global_include = ["*.md", "*.mdx"]
+
+# Per-repo definitions — add one [[repos]] section per repo.
+#
+# [[repos]]
+# path = "~/code/my-project"
+# name = "my-project"           # optional, defaults to directory basename
+# exclude = ["docs/generated/"] # merged with global_exclude
+# include = ["*.tex"]           # merged with global_include
+#
+# [[repos]]
+# path = "~/code/another-repo"  # minimal — just the path, all defaults

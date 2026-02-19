@@ -9,11 +9,11 @@ This repository contains **doc-link**, a lightweight background service that mon
 ```
 doc-link/
 ├── Cargo.toml
-├── doc-link.yaml.example
+├── doc-link.toml.example
 ├── src/
 │   ├── main.rs          # Entry point, clap CLI dispatch
 │   ├── lib.rs           # Library root, public module declarations
-│   ├── config.rs        # YAML loading, validation, defaults
+│   ├── config.rs        # TOML loading, validation, defaults
 │   ├── matcher.rs       # Include/exclude filtering (ignore + globset)
 │   ├── linker.rs        # Symlink creation/removal/pruning
 │   ├── scanner.rs       # Full tree scan + reconciliation
@@ -45,7 +45,7 @@ When a component expects a value to be provided:
 - Keep code minimal, readable, and maintainable
 - Focus on correctness over premature optimization
 - Sync with std threads, not async/tokio — this is a simple service
-- Key crates: `notify`, `ignore`, `globset`, `serde_yaml`, `clap`, `tracing`, `anyhow`/`thiserror`
+- Key crates: `notify`, `ignore`, `globset`, `toml`, `clap`, `tracing`, `anyhow`/`thiserror`
 
 ### Server Interaction Constraints
 

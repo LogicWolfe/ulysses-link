@@ -126,13 +126,13 @@ mod tests {
     use tempfile::TempDir;
 
     fn make_config(repo_path: &Path, output_dir: &Path) -> Config {
-        let yaml = format!(
-            "version: 1\noutput_dir: {}\nrepos:\n  - path: {}",
+        let toml = format!(
+            "version = 1\noutput_dir = \"{}\"\n\n[[repos]]\npath = \"{}\"",
             output_dir.display(),
             repo_path.display()
         );
-        let config_file = repo_path.parent().unwrap().join("test-config.yaml");
-        fs::write(&config_file, yaml).unwrap();
+        let config_file = repo_path.parent().unwrap().join("test-config.toml");
+        fs::write(&config_file, toml).unwrap();
         config::load_config(Some(&config_file)).unwrap()
     }
 

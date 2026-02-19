@@ -21,7 +21,7 @@ globset = "0.4"
 ignore = "0.4"
 notify = "7"
 serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9"
+toml = "0.8"
 shellexpand = "3"
 thiserror = "2"
 tracing = "0.1"

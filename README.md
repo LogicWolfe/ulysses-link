@@ -67,10 +67,10 @@ cargo install --path .
 
 ## Configure
 
-On first run, doc-link generates a default config at `~/.config/doc-link/config.yaml`. Or copy the example:
+On first run, doc-link generates a default config at `~/.config/doc-link/config.toml`. Or copy the example:
 
 ```sh
-cp doc-link.yaml.example ~/.config/doc-link/config.yaml
+cp doc-link.toml.example ~/.config/doc-link/config.toml
 ```
 
 Then add your repos and you're ready to go.
@@ -78,19 +78,20 @@ Then add your repos and you're ready to go.
 Config search order:
 
 1. `--config PATH` (explicit CLI flag)
-2. `./doc-link.yaml` (current directory)
-3. `~/.config/doc-link/config.yaml`
-4. `~/Library/Application Support/doc-link/config.yaml` (macOS only)
+2. `./doc-link.toml` (current directory)
+3. `~/.config/doc-link/config.toml`
+4. `~/Library/Application Support/doc-link/config.toml` (macOS only)
 
 ### Minimal config
 
 All you need is a version, output directory, and at least one repo:
 
-```yaml
-version: 1
-output_dir: ~/doc-link
-repos:
-  - path: ~/code/my-project
+```toml
+version = 1
+output_dir = "~/doc-link"
+
+[[repos]]
+path = "~/code/my-project"
 ```
 
 This uses all the default include/exclude patterns listed above.
@@ -99,34 +100,35 @@ This uses all the default include/exclude patterns listed above.
 
 Add extra excludes or includes for specific repos:
 
-```yaml
-version: 1
-output_dir: ~/doc-link
-repos:
-  - path: ~/code/my-project
-    name: my-project          # optional, defaults to directory basename
-    exclude:
-      - docs/generated/       # skip generated docs
-    include:
-      - "*.tex"               # also mirror LaTeX files for this repo
+```toml
+version = 1
+output_dir = "~/doc-link"
 
-  - path: ~/code/another-repo # minimal — just the path, all defaults
+[[repos]]
+path = "~/code/my-project"
+name = "my-project"                # optional, defaults to directory basename
+exclude = ["docs/generated/"]      # merged with global_exclude
+include = ["*.tex"]                # also mirror LaTeX files for this repo
+
+[[repos]]
+path = "~/code/another-repo"      # minimal — just the path, all defaults
 ```
 
 ### All config options
 
-```yaml
-version: 1                    # required, must be 1
-output_dir: ~/doc-link        # where the symlink tree lives
-debounce_seconds: 0.5         # batch rapid events (0.0–30.0)
-log_level: INFO               # TRACE, DEBUG, INFO, WARNING, ERROR
-global_exclude: [...]         # override the default exclude list
-global_include: [...]         # override the default include list
-repos:                        # list of repos to watch
-  - path: ~/code/repo         # required
-    name: repo                # optional, derived from path basename
-    exclude: [...]            # merged with global_exclude
-    include: [...]            # merged with global_include
+```toml
+version = 1                        # required, must be 1
+output_dir = "~/doc-link"          # where the symlink tree lives
+debounce_seconds = 0.5             # batch rapid events (0.0–30.0)
+log_level = "INFO"                 # TRACE, DEBUG, INFO, WARNING, ERROR
+global_exclude = ["..."]           # override the default exclude list
+global_include = ["..."]           # override the default include list
+
+[[repos]]                          # one section per repo
+path = "~/code/repo"               # required
+name = "repo"                      # optional, derived from path basename
+exclude = ["..."]                  # merged with global_exclude
+include = ["..."]                  # merged with global_include
 ```
 
 Exclude patterns use `.gitignore` syntax. Include patterns use glob syntax.
@@ -139,7 +141,7 @@ Build the full symlink tree once and exit. Good for testing your config:
 
 ```sh
 doc-link scan
-doc-link scan --config ~/my-config.yaml
+doc-link scan --config ~/my-config.toml
 ```
 
 ### Foreground service
@@ -148,7 +150,7 @@ Watch repos for changes continuously:
 
 ```sh
 doc-link run
-doc-link run --config ~/my-config.yaml
+doc-link run --config ~/my-config.toml
 ```
 
 Stop with `Ctrl-C`. Send `SIGHUP` to reload config without restarting.
@@ -158,7 +160,7 @@ Stop with `Ctrl-C`. Send `SIGHUP` to reload config without restarting.
 Install as an OS service that starts on login:
 
 ```sh
-doc-link install --config ~/.config/doc-link/config.yaml
+doc-link install --config ~/.config/doc-link/config.toml
 ```
 
 This installs a **launchd user agent** on macOS or a **systemd user unit** on Linux. On Windows, it prints manual setup instructions for Task Scheduler or NSSM.
@@ -210,7 +212,7 @@ doc-link/
 ├── src/
 │   ├── main.rs          # clap CLI entry point
 │   ├── lib.rs           # library root
-│   ├── config.rs        # YAML loading, validation, path expansion
+│   ├── config.rs        # TOML loading, validation, path expansion
 │   ├── matcher.rs       # include/exclude filtering (ignore + globset)
 │   ├── linker.rs        # symlink creation/removal/pruning
 │   ├── scanner.rs       # full tree scan + reconciliation
@@ -228,6 +230,6 @@ doc-link/
 | `notify` | Filesystem event watching (FSEvents/inotify/ReadDirectoryChanges) |
 | `ignore` | Gitignore-style exclude pattern matching |
 | `globset` | Glob include pattern matching |
-| `serde` + `serde_yaml` | YAML config deserialization |
+| `serde` + `toml` | TOML config deserialization |
 | `clap` | CLI argument parsing |
 | `tracing` | Structured logging |

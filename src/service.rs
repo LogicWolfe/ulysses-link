@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::{Context, Result};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::config::Config;
 
@@ -16,39 +16,15 @@ fn binary_path() -> PathBuf {
     std::env::current_exe().expect("Failed to determine binary path")
 }
 
+#[cfg(target_os = "macos")]
 fn log_dir() -> PathBuf {
-    #[cfg(target_os = "macos")]
-    {
-        let dir = dirs::home_dir()
-            .expect("Failed to determine home directory")
-            .join("Library")
-            .join("Logs")
-            .join("ulysses-link");
-        std::fs::create_dir_all(&dir).ok();
-        dir
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let dir = dirs::home_dir()
-            .expect("Failed to determine home directory")
-            .join(".local")
-            .join("share")
-            .join("ulysses-link")
-            .join("logs");
-        std::fs::create_dir_all(&dir).ok();
-        dir
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        let dir = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("ulysses-link")
-            .join("logs");
-        std::fs::create_dir_all(&dir).ok();
-        dir
-    }
+    let dir = dirs::home_dir()
+        .expect("Failed to determine home directory")
+        .join("Library")
+        .join("Logs")
+        .join("ulysses-link");
+    std::fs::create_dir_all(&dir).ok();
+    dir
 }
 
 pub fn install_service(config: &Config) -> Result<()> {
@@ -266,7 +242,7 @@ fn install_launchd(config: &Config) -> Result<()> {
 
     if !status.success() {
         // Fall back to legacy load
-        warn!("launchctl bootstrap failed, trying legacy load");
+        tracing::warn!("launchctl bootstrap failed, trying legacy load");
         Command::new("launchctl")
             .args(["load", &plist.to_string_lossy()])
             .status()

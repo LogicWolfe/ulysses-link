@@ -130,6 +130,16 @@ ulysses-link version               Print version
 
 ```sh
 cargo test                         # run all tests
-cargo clippy                       # lint
+cargo clippy -- -D warnings        # lint
 cargo fmt                          # format
+```
+
+### Pre-commit hooks
+
+This project uses [Lefthook](https://github.com/evilmartians/lefthook) to run `cargo fmt` and `cargo clippy --fix` before each commit. Fixed files are automatically staged.
+
+After cloning, install the hooks:
+
+```sh
+lefthook install
 ```

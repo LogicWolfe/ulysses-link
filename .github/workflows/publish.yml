@@ -10,6 +10,7 @@ jobs:
     container: rust:latest
     steps:
       - uses: actions/checkout@v4
+      - run: rustup component add clippy
       - run: cargo clippy -- -D warnings
 
   test:

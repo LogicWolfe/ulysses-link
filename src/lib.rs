@@ -5,4 +5,5 @@ pub mod manifest;
 pub mod matcher;
 pub mod scanner;
 pub mod service;
+pub mod upgrade;
 pub mod watcher;

@@ -151,6 +151,40 @@ pub fn is_running() -> bool {
     }
 }
 
+/// Restart the background service (e.g. after an upgrade).
+pub fn restart_service() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let uid = unsafe { libc::getuid() };
+        let target = format!("gui/{uid}/{LAUNCHD_LABEL}");
+        let status = Command::new("launchctl")
+            .args(["kickstart", "-k", &target])
+            .status()
+            .context("Failed to run launchctl kickstart")?;
+        if !status.success() {
+            anyhow::bail!("launchctl kickstart failed");
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let status = Command::new("systemctl")
+            .args(["--user", "restart", SYSTEMD_UNIT_NAME])
+            .status()
+            .context("Failed to restart systemd unit")?;
+        if !status.success() {
+            anyhow::bail!("systemctl restart failed");
+        }
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        anyhow::bail!("Service restart not supported on this platform")
+    }
+}
+
 /// Send SIGHUP to the running service to trigger a config reload.
 pub fn send_reload_signal() -> Result<()> {
     #[cfg(target_os = "macos")]
@@ -385,7 +419,7 @@ After=default.target
 [Service]
 Type=simple
 ExecStart={binary} run --config {config_path}
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]
@@ -536,6 +570,7 @@ mod tests {
             debounce_seconds: 0.5,
             log_level: "INFO".into(),
             rescan_interval: crate::config::RescanInterval::Auto,
+            auto_upgrade: true,
             config_path: Some(tmp.path().join("config.yaml")),
         };
 
@@ -557,12 +592,13 @@ mod tests {
             debounce_seconds: 0.5,
             log_level: "INFO".into(),
             rescan_interval: crate::config::RescanInterval::Auto,
+            auto_upgrade: true,
             config_path: Some(tmp.path().join("config.yaml")),
         };
 
         let unit = build_unit(&config);
         assert!(unit.contains("ulysses-link"));
         assert!(unit.contains("[Service]"));
-        assert!(unit.contains("Restart=on-failure"));
+        assert!(unit.contains("Restart=always"));
     }
 }

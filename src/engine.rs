@@ -12,7 +12,10 @@ use crate::config::{load_config, Config, RepoConfig, RescanInterval};
 use crate::linker;
 use crate::manifest::Manifest;
 use crate::scanner::{full_scan, scan_repo};
+use crate::upgrade::{self, VersionCheck};
 use crate::watcher::{self, ConfigWatcher, MirrorWatcher, RepoWatcher};
+
+const UPGRADE_CHECK_INTERVAL: Duration = Duration::from_secs(3600);
 
 pub struct MirrorEngine {
     config: Config,
@@ -23,6 +26,8 @@ pub struct MirrorEngine {
     running: Arc<AtomicBool>,
     last_scan_at: Instant,
     last_scan_duration: Duration,
+    last_upgrade_check: Instant,
+    last_etag: Option<String>,
 }
 
 impl MirrorEngine {
@@ -36,6 +41,8 @@ impl MirrorEngine {
             running: Arc::new(AtomicBool::new(false)),
             last_scan_at: Instant::now(),
             last_scan_duration: Duration::ZERO,
+            last_upgrade_check: Instant::now(),
+            last_etag: None,
         }
     }
 
@@ -461,6 +468,43 @@ impl MirrorEngine {
         }
     }
 
+    fn check_for_upgrade(&mut self) {
+        match upgrade::check_latest_version(self.last_etag.as_deref()) {
+            Ok(VersionCheck::NotModified) => {
+                debug!("Upgrade check: index not modified");
+            }
+            Ok(VersionCheck::UpToDate { etag }) => {
+                debug!("Upgrade check: already up to date");
+                self.last_etag = Some(etag);
+            }
+            Ok(VersionCheck::UpdateAvailable { version, etag }) => {
+                info!("New version available: {version}");
+                self.last_etag = Some(etag);
+
+                let cargo = match upgrade::find_cargo() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!("Cannot find cargo for auto-upgrade: {e}");
+                        return;
+                    }
+                };
+
+                match upgrade::run_cargo_install(&cargo) {
+                    Ok(()) => {
+                        info!("Upgraded to {version}, restarting");
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        error!("Auto-upgrade failed: {e}");
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Upgrade check failed: {e}");
+            }
+        }
+    }
+
     fn rescan_interval(&self) -> Option<Duration> {
         match &self.config.rescan_interval {
             RescanInterval::Never => None,
@@ -524,6 +568,13 @@ impl MirrorEngine {
                         result.created, result.pruned, self.last_scan_duration,
                     );
                 }
+            }
+
+            if self.config.auto_upgrade
+                && self.last_upgrade_check.elapsed() >= UPGRADE_CHECK_INTERVAL
+            {
+                self.last_upgrade_check = Instant::now();
+                self.check_for_upgrade();
             }
         }
 

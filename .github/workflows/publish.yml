@@ -20,8 +20,15 @@ jobs:
       - uses: actions/checkout@v4
       - run: cargo test --locked
 
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --test e2e_watcher --locked -- --ignored
+
   publish:
-    needs: [lint, test]
+    needs: [lint, test, test-macos]
     runs-on: ubuntu-latest
     container: rust:latest
     permissions:

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use ulysses_link::{config, engine, linker, manifest, scanner, service};
+use ulysses_link::{config, engine, linker, manifest, scanner, service, upgrade};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -62,6 +62,8 @@ enum Commands {
         #[arg(long)]
         config: Option<PathBuf>,
     },
+    /// Upgrade to the latest version
+    Upgrade,
     /// Print version and exit
     Version,
 }
@@ -89,6 +91,7 @@ fn main() {
         Some(Commands::Run { config }) => cmd_run(config),
         Some(Commands::Install { config }) => cmd_install(config),
         Some(Commands::Uninstall) => cmd_uninstall(),
+        Some(Commands::Upgrade) => cmd_upgrade(),
         Some(Commands::Status) => cmd_status(),
         Some(Commands::Logs) => cmd_logs(),
     }
@@ -370,6 +373,50 @@ fn cmd_install(config_arg: Option<PathBuf>) {
     if let Err(e) = service::install_service(&cfg) {
         eprintln!("Failed to install service: {e}");
         std::process::exit(1);
+    }
+}
+
+fn cmd_upgrade() {
+    println!("Checking for updates...");
+
+    let check = match upgrade::check_latest_version(None) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to check for updates: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let version = match check {
+        upgrade::VersionCheck::UpToDate { .. } | upgrade::VersionCheck::NotModified => {
+            println!("Already up to date (v{VERSION})");
+            return;
+        }
+        upgrade::VersionCheck::UpdateAvailable { version, .. } => version,
+    };
+
+    println!("Upgrading to v{version}...");
+
+    let cargo = match upgrade::find_cargo() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Cannot find cargo: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(e) = upgrade::run_cargo_install(&cargo) {
+        eprintln!("Upgrade failed: {e}");
+        std::process::exit(1);
+    }
+
+    println!("Upgraded to v{version}");
+
+    if service::is_running() {
+        match service::restart_service() {
+            Ok(()) => println!("Service restarted"),
+            Err(e) => eprintln!("Warning: failed to restart service: {e}"),
+        }
     }
 }
 

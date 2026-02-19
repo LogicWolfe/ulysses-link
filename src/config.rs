@@ -124,6 +124,7 @@ struct RawConfig {
     debounce_seconds: Option<f64>,
     log_level: Option<String>,
     rescan_interval: Option<RawRescanInterval>,
+    auto_upgrade: Option<bool>,
     repos: Option<Vec<RawRepo>>,
 }
 
@@ -164,6 +165,7 @@ pub struct Config {
     pub debounce_seconds: f64,
     pub log_level: String,
     pub rescan_interval: RescanInterval,
+    pub auto_upgrade: bool,
     pub config_path: Option<PathBuf>,
 }
 
@@ -356,12 +358,15 @@ fn parse_config(raw: RawConfig, config_path: Option<PathBuf>) -> Result<Config, 
 
     validate_nesting(&repos)?;
 
+    let auto_upgrade = raw.auto_upgrade.unwrap_or(true);
+
     Ok(Config {
         output_dir,
         repos,
         debounce_seconds: debounce,
         log_level,
         rescan_interval,
+        auto_upgrade,
         config_path,
     })
 }
@@ -565,6 +570,9 @@ log_level = "INFO"
 # "auto" (default) scales with scan speed: max(1000 × scan duration, 1 minute).
 # "never" disables periodic rescans. A number sets a fixed interval in seconds.
 # rescan_interval = "auto"
+
+# Automatically check for and install new versions (default: true).
+# auto_upgrade = true
 
 # Global exclude patterns applied to ALL repos (gitignore syntax).
 # These are checked BEFORE includes, so node_modules/*.md stays excluded.

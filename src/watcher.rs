@@ -433,7 +433,18 @@ fn flush_source_events(
     let mut deletes = 0u32;
 
     for (rel_path, event_type) in &batch {
-        match event_type {
+        // On macOS, FSEvents may emit multiple flags for one operation (e.g.
+        // Remove + Name + Data for a deletion). Later events overwrite earlier
+        // ones in the HashMap, so a file can be marked Created/Modified even
+        // though it was actually deleted. Re-check existence here.
+        let effective_type = match event_type {
+            EventType::Created | EventType::Modified if !repo_path.join(rel_path).exists() => {
+                &EventType::Deleted
+            }
+            other => other,
+        };
+
+        match effective_type {
             EventType::Deleted => {
                 let manifest_rel = format!("{repo_name}/{rel_path}");
                 match linker::propagate_delete(&manifest_rel, &mut manifest, output_dir) {

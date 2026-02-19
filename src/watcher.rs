@@ -12,7 +12,7 @@ use tracing::{debug, error, info};
 use walkdir::WalkDir;
 
 use crate::config::RepoConfig;
-use crate::linker;
+use crate::linker::{self, LinkOutcome};
 use crate::matcher;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -246,8 +246,8 @@ fn flush_events(
             EventType::Created => {
                 if matcher::should_mirror(rel_path, exclude, include) {
                     match linker::ensure_symlink(repo_path, repo_name, rel_path, output_dir) {
-                        Ok(true) => creates += 1,
-                        Ok(false) => {}
+                        Ok(LinkOutcome::Created) => creates += 1,
+                        Ok(LinkOutcome::AlreadyCorrect | LinkOutcome::Skipped) => {}
                         Err(e) => error!("Error creating symlink for {}: {}", rel_path, e),
                     }
                 }
@@ -308,8 +308,8 @@ fn scan_new_dir(
 
         if matcher::should_mirror(&file_rel, exclude, include) {
             match linker::ensure_symlink(repo_path, repo_name, &file_rel, output_dir) {
-                Ok(true) => *creates += 1,
-                Ok(false) => {}
+                Ok(LinkOutcome::Created) => *creates += 1,
+                Ok(LinkOutcome::AlreadyCorrect | LinkOutcome::Skipped) => {}
                 Err(e) => error!("Error creating symlink for {}: {}", file_rel, e),
             }
         }

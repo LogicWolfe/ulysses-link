@@ -2,23 +2,31 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use walkdir::WalkDir;
 
+#[derive(Debug, PartialEq)]
+pub enum LinkOutcome {
+    Created,
+    AlreadyCorrect,
+    Skipped,
+}
+
 /// Create a symlink if it doesn't exist or fix it if it points to the wrong target.
-/// Returns true if a new symlink was created/fixed, false if already correct.
+/// Returns `Created` for new/fixed symlinks, `AlreadyCorrect` if already pointing
+/// to the right target, or `Skipped` if a real file/directory occupies the target path.
 pub fn ensure_symlink(
     repo_path: &Path,
     repo_name: &str,
     rel_path: &str,
     output_dir: &Path,
-) -> Result<bool> {
+) -> Result<LinkOutcome> {
     let source = repo_path.join(rel_path);
     let target = output_dir.join(repo_name).join(rel_path);
 
     if target.is_symlink() {
         match (target.canonicalize(), source.canonicalize()) {
-            (Ok(t), Ok(s)) if t == s => return Ok(false),
+            (Ok(t), Ok(s)) if t == s => return Ok(LinkOutcome::AlreadyCorrect),
             _ => {
                 // Points somewhere wrong or broken, fix it
                 fs::remove_file(&target).with_context(|| {
@@ -26,6 +34,13 @@ pub fn ensure_symlink(
                 })?;
             }
         }
+    } else if target.exists() {
+        warn!(
+            "Skipping {}: real file exists at {}",
+            rel_path,
+            target.display()
+        );
+        return Ok(LinkOutcome::Skipped);
     }
 
     if let Some(parent) = target.parent() {
@@ -60,7 +75,7 @@ pub fn ensure_symlink(
         target.display(),
         source.display()
     );
-    Ok(true)
+    Ok(LinkOutcome::Created)
 }
 
 /// Remove a symlink. Only removes if it IS a symlink (safety check).
@@ -252,8 +267,8 @@ mod tests {
         let source = repo.path().join("doc.md");
         fs::write(&source, "hello").unwrap();
 
-        let created = ensure_symlink(repo.path(), "my-repo", "doc.md", output.path()).unwrap();
-        assert!(created);
+        let outcome = ensure_symlink(repo.path(), "my-repo", "doc.md", output.path()).unwrap();
+        assert_eq!(outcome, LinkOutcome::Created);
 
         let link = output.path().join("my-repo").join("doc.md");
         assert!(link.is_symlink());
@@ -266,8 +281,14 @@ mod tests {
         let source = repo.path().join("doc.md");
         fs::write(&source, "hello").unwrap();
 
-        assert!(ensure_symlink(repo.path(), "my-repo", "doc.md", output.path()).unwrap());
-        assert!(!ensure_symlink(repo.path(), "my-repo", "doc.md", output.path()).unwrap());
+        assert_eq!(
+            ensure_symlink(repo.path(), "my-repo", "doc.md", output.path()).unwrap(),
+            LinkOutcome::Created
+        );
+        assert_eq!(
+            ensure_symlink(repo.path(), "my-repo", "doc.md", output.path()).unwrap(),
+            LinkOutcome::AlreadyCorrect
+        );
     }
 
     #[test]
@@ -284,9 +305,25 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&wrong_target, &link).unwrap();
 
-        let created = ensure_symlink(repo.path(), "my-repo", "doc.md", output.path()).unwrap();
-        assert!(created);
+        let outcome = ensure_symlink(repo.path(), "my-repo", "doc.md", output.path()).unwrap();
+        assert_eq!(outcome, LinkOutcome::Created);
         assert_eq!(fs::read_to_string(&link).unwrap(), "correct");
+    }
+
+    #[test]
+    fn test_ensure_symlink_skips_real_file() {
+        let (repo, output) = setup();
+        let source = repo.path().join("doc.md");
+        fs::write(&source, "source").unwrap();
+
+        // Place a real file at the target path
+        let target = output.path().join("my-repo").join("doc.md");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, "real content").unwrap();
+
+        let outcome = ensure_symlink(repo.path(), "my-repo", "doc.md", output.path()).unwrap();
+        assert_eq!(outcome, LinkOutcome::Skipped);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "real content");
     }
 
     #[test]

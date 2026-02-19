@@ -400,11 +400,12 @@ fn compile_include(patterns: &[String]) -> Result<GlobSet, ConfigError> {
 
 // --- Default config generation ---
 
-pub fn generate_default_config(path: &Path) -> Result<(), ConfigError> {
+pub fn generate_default_config(path: &Path, output_dir: &Path) -> Result<(), ConfigError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, DEFAULT_CONFIG_CONTENT)?;
+    let content = DEFAULT_CONFIG_TEMPLATE.replace("{{output_dir}}", &output_dir.to_string_lossy());
+    std::fs::write(path, content)?;
     Ok(())
 }
 
@@ -415,12 +416,12 @@ pub fn default_config_path() -> PathBuf {
         .join("config.toml")
 }
 
-const DEFAULT_CONFIG_CONTENT: &str = r#"# ulysses-link configuration
+const DEFAULT_CONFIG_TEMPLATE: &str = r#"# ulysses-link configuration
 version = 1
 
 # Where the symlink mirror tree is rooted.
 # Tilde and env vars are expanded.
-output_dir = "~/ulysses-link"
+output_dir = "{{output_dir}}"
 
 # Debounce window in seconds for filesystem events.
 # After a burst of events (e.g. git pull), wait this long before syncing.
@@ -534,44 +535,42 @@ pub fn remove_repo(config_path: &Path, repo_path: &Path) -> Result<Option<String
     Ok(removed_name)
 }
 
-/// Ensure a config file exists, prompting the user to create one if needed.
-/// Returns the config path.
-pub fn ensure_config_exists(config_arg: Option<&Path>) -> Result<PathBuf, ConfigError> {
+/// Ensure a config file exists.
+/// If no config is found and `output_dir` is provided, generates one with that output dir.
+/// If no config is found and `output_dir` is `None`, returns an error.
+pub fn ensure_config_exists(
+    config_arg: Option<&Path>,
+    output_dir: Option<&Path>,
+) -> Result<PathBuf, ConfigError> {
     match find_config_path(config_arg) {
         Ok(path) => Ok(path),
         Err(ConfigError::NoConfigFound) => {
             let dest = default_config_path();
-            println!(
-                "No config file found. Create default config at {}?",
-                dest.display()
-            );
-            println!("  Output directory: ~/ulysses-link");
-
-            let selection = dialoguer::Select::new()
-                .items(&["Yes", "Edit first", "No"])
-                .default(0)
-                .interact()
-                .map_err(|e| ConfigError::Validation(format!("Input error: {e}")))?;
-
-            match selection {
-                0 => {
-                    generate_default_config(&dest)?;
-                    println!("Created {}", dest.display());
+            match output_dir {
+                Some(dir) => {
+                    generate_default_config(&dest, dir)?;
+                    println!("Created config at {}", dest.display());
                     Ok(dest)
                 }
-                1 => {
-                    generate_default_config(&dest)?;
-                    println!("Created {}", dest.display());
-                    open_in_editor(&dest)?;
-                    Ok(dest)
-                }
-                _ => {
-                    std::process::exit(0);
-                }
+                None => Err(ConfigError::Validation(
+                    "No config file found. Run 'ulysses-link sync <path> <output-dir>' to get started.".into(),
+                )),
             }
         }
         Err(e) => Err(e),
     }
+}
+
+/// Update the output_dir value in an existing config file.
+pub fn set_output_dir(config_path: &Path, output_dir: &Path) -> Result<(), ConfigError> {
+    let contents = std::fs::read_to_string(config_path)?;
+    let mut doc = contents
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| ConfigError::Validation(format!("Failed to parse config: {e}")))?;
+
+    doc["output_dir"] = toml_edit::value(output_dir.to_string_lossy().as_ref());
+    std::fs::write(config_path, doc.to_string())?;
+    Ok(())
 }
 
 /// Open a file in the user's preferred editor.
@@ -805,13 +804,14 @@ mod tests {
     fn test_generate_default_config() {
         let tmp = TempDir::new().unwrap();
         let config_path = tmp.path().join("subdir").join("config.toml");
+        let output_dir = tmp.path().join("my-output");
 
-        generate_default_config(&config_path).unwrap();
+        generate_default_config(&config_path, &output_dir).unwrap();
         assert!(config_path.exists());
 
         let content = fs::read_to_string(&config_path).unwrap();
         assert!(content.contains("version = 1"));
-        assert!(content.contains("output_dir"));
+        assert!(content.contains(&output_dir.to_string_lossy().to_string()));
     }
 
     #[test]

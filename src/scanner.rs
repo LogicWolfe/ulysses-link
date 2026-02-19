@@ -4,13 +4,14 @@ use tracing::{info, warn};
 use walkdir::WalkDir;
 
 use crate::config::{Config, RepoConfig};
-use crate::linker;
+use crate::linker::{self, LinkOutcome};
 use crate::matcher;
 
 #[derive(Debug, Default)]
 pub struct ScanResult {
     pub created: u32,
     pub already_existed: u32,
+    pub skipped: u32,
     pub pruned: u32,
     pub errors: u32,
 }
@@ -19,6 +20,7 @@ impl ScanResult {
     fn merge(&mut self, other: &ScanResult) {
         self.created += other.created;
         self.already_existed += other.already_existed;
+        self.skipped += other.skipped;
         self.pruned += other.pruned;
         self.errors += other.errors;
     }
@@ -88,8 +90,9 @@ pub fn scan_repo(repo_config: &RepoConfig, output_dir: &Path) -> ScanResult {
         }
 
         match linker::ensure_symlink(repo_path, &repo_config.name, &rel_path, output_dir) {
-            Ok(true) => result.created += 1,
-            Ok(false) => result.already_existed += 1,
+            Ok(LinkOutcome::Created) => result.created += 1,
+            Ok(LinkOutcome::AlreadyCorrect) => result.already_existed += 1,
+            Ok(LinkOutcome::Skipped) => result.skipped += 1,
             Err(e) => {
                 tracing::error!("Failed to create symlink for {}: {}", rel_path, e);
                 result.errors += 1;
@@ -111,8 +114,13 @@ pub fn scan_repo(repo_config: &RepoConfig, output_dir: &Path) -> ScanResult {
     }
 
     info!(
-        "Scan complete for {}: {} created, {} existed, {} pruned, {} errors",
-        repo_config.name, result.created, result.already_existed, result.pruned, result.errors,
+        "Scan complete for {}: {} created, {} existed, {} skipped, {} pruned, {} errors",
+        repo_config.name,
+        result.created,
+        result.already_existed,
+        result.skipped,
+        result.pruned,
+        result.errors,
     );
 
     result

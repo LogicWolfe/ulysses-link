@@ -23,6 +23,10 @@ enum Commands {
         /// Directory to add and sync. Omit to sync all configured repos.
         path: Option<PathBuf>,
 
+        /// Output directory for the symlink mirror tree.
+        /// Required when no config file exists.
+        output: Option<PathBuf>,
+
         /// Path to config file
         #[arg(long)]
         config: Option<PathBuf>,
@@ -72,7 +76,11 @@ fn main() {
         Some(Commands::Version) => {
             println!("ulysses-link {VERSION}");
         }
-        Some(Commands::Sync { path, config }) => cmd_sync(path, config),
+        Some(Commands::Sync {
+            path,
+            output,
+            config,
+        }) => cmd_sync(path, output, config),
         Some(Commands::Remove { path, config }) => cmd_remove(path, config),
         Some(Commands::Config) => cmd_config(),
         Some(Commands::Run { config }) => cmd_run(config),
@@ -103,16 +111,25 @@ fn setup_logging(log_level: &str) {
         .init();
 }
 
-fn cmd_sync(path: Option<PathBuf>, config_arg: Option<PathBuf>) {
+fn cmd_sync(path: Option<PathBuf>, output: Option<PathBuf>, config_arg: Option<PathBuf>) {
     if let Some(ref repo_path) = path {
         // Sync a specific directory: ensure config exists, add repo, scan
-        let config_path = match config::ensure_config_exists(config_arg.as_deref()) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("Error: {e}");
+        let config_path =
+            match config::ensure_config_exists(config_arg.as_deref(), output.as_deref()) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            };
+
+        // If output was provided and config already existed, persist the new output_dir
+        if let Some(ref output_dir) = output {
+            if let Err(e) = config::set_output_dir(&config_path, output_dir) {
+                eprintln!("Failed to update output_dir in config: {e}");
                 std::process::exit(1);
             }
-        };
+        }
 
         match config::add_repo(&config_path, repo_path) {
             Ok(true) => println!("Added {} to config", repo_path.display()),
@@ -123,7 +140,7 @@ fn cmd_sync(path: Option<PathBuf>, config_arg: Option<PathBuf>) {
             }
         }
 
-        let cfg = match config::load_config(Some(&config_path)) {
+        let mut cfg = match config::load_config(Some(&config_path)) {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("Error: {e}");
@@ -132,11 +149,23 @@ fn cmd_sync(path: Option<PathBuf>, config_arg: Option<PathBuf>) {
         };
         setup_logging(&cfg.log_level);
 
+        // Override output_dir with the CLI-provided path
+        if let Some(ref output_dir) = output {
+            let expanded = std::fs::canonicalize(output_dir).unwrap_or_else(|_| output_dir.clone());
+            cfg.output_dir = expanded;
+        }
+
+        // Ensure output dir exists
+        if let Err(e) = std::fs::create_dir_all(&cfg.output_dir) {
+            eprintln!(
+                "Failed to create output directory {}: {e}",
+                cfg.output_dir.display()
+            );
+            std::process::exit(1);
+        }
+
         let result = scanner::full_scan(&cfg);
-        println!(
-            "Sync complete: {} created, {} existed, {} pruned, {} errors",
-            result.created, result.already_existed, result.pruned, result.errors,
-        );
+        print_sync_summary(&result);
 
         notify_or_warn_service();
     } else {
@@ -145,7 +174,7 @@ fn cmd_sync(path: Option<PathBuf>, config_arg: Option<PathBuf>) {
             Ok(c) => c,
             Err(config::ConfigError::NoConfigFound) => {
                 eprintln!(
-                    "No config file found. Run 'ulysses-link sync <path>' to add a repo first."
+                    "No config file found. Run 'ulysses-link sync <path> <output-dir>' to get started."
                 );
                 std::process::exit(1);
             }
@@ -157,11 +186,15 @@ fn cmd_sync(path: Option<PathBuf>, config_arg: Option<PathBuf>) {
         setup_logging(&cfg.log_level);
 
         let result = scanner::full_scan(&cfg);
-        println!(
-            "Sync complete: {} created, {} existed, {} pruned, {} errors",
-            result.created, result.already_existed, result.pruned, result.errors,
-        );
+        print_sync_summary(&result);
     }
+}
+
+fn print_sync_summary(result: &scanner::ScanResult) {
+    println!(
+        "Sync complete: {} created, {} existed, {} skipped, {} pruned, {} errors",
+        result.created, result.already_existed, result.skipped, result.pruned, result.errors,
+    );
 }
 
 fn cmd_remove(repo_path: PathBuf, config_arg: Option<PathBuf>) {
@@ -253,7 +286,7 @@ fn cmd_remove(repo_path: PathBuf, config_arg: Option<PathBuf>) {
 }
 
 fn cmd_config() {
-    let config_path = match config::ensure_config_exists(None) {
+    let config_path = match config::ensure_config_exists(None, None) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("Error: {e}");
@@ -271,16 +304,9 @@ fn cmd_run(config_arg: Option<PathBuf>) {
     let cfg = match config::load_config(config_arg.as_deref()) {
         Ok(c) => c,
         Err(config::ConfigError::NoConfigFound) => {
-            let dest = config::default_config_path();
-            println!(
-                "No config file found. Generating default at {}",
-                dest.display()
+            eprintln!(
+                "No config file found. Run 'ulysses-link sync <path> <output-dir>' to get started."
             );
-            if let Err(e) = config::generate_default_config(&dest) {
-                eprintln!("Failed to generate config: {e}");
-                std::process::exit(1);
-            }
-            println!("Edit {} to add your repos, then re-run.", dest.display());
             std::process::exit(1);
         }
         Err(e) => {

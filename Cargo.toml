@@ -1,6 +1,6 @@
 [package]
 name = "ulysses-link"
-version = "0.9.4"
+version = "0.9.5"
 edition = "2021"
 description = "Background service that extracts documentation files from code repositories and links them for Ulysses external folder importing"
 license = "MIT"

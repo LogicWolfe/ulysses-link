@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
 
@@ -20,6 +21,18 @@ fn create_test_config(repo_paths: &[&Path], output_dir: &Path, config_dir: &Path
     let config_path = config_dir.join("ulysses-link.toml");
     fs::write(&config_path, &config_content).unwrap();
     config_path.to_string_lossy().to_string()
+}
+
+fn load_manifests(
+    config: &ulysses_link::config::Config,
+) -> HashMap<PathBuf, ulysses_link::manifest::Manifest> {
+    let mut manifests = HashMap::new();
+    for od in config.active_output_dirs() {
+        manifests
+            .entry(od.clone())
+            .or_insert_with(|| ulysses_link::manifest::Manifest::load(&od).unwrap());
+    }
+    manifests
 }
 
 #[test]
@@ -65,8 +78,8 @@ fn test_end_to_end_scan() {
 
     let config_path = std::path::PathBuf::from(&config_path_str);
     let config = ulysses_link::config::load_config(Some(&config_path)).unwrap();
-    let mut manifest = ulysses_link::manifest::Manifest::load(&output).unwrap();
-    let result = ulysses_link::scanner::full_scan(&config, &mut manifest);
+    let mut manifests = load_manifests(&config);
+    let result = ulysses_link::scanner::full_scan(&config, &mut manifests);
 
     assert!(
         result.errors == 0,
@@ -105,7 +118,7 @@ fn test_end_to_end_scan() {
     assert!(!output.join("repo2").join(".venv").exists());
 
     // Run scan again — should be idempotent
-    let result2 = ulysses_link::scanner::full_scan(&config, &mut manifest);
+    let result2 = ulysses_link::scanner::full_scan(&config, &mut manifests);
     assert_eq!(result2.created, 0, "Second scan should create nothing");
     assert_eq!(
         result2.already_existed, result.created,
@@ -114,7 +127,7 @@ fn test_end_to_end_scan() {
 
     // Delete a source file and re-scan — should prune
     fs::remove_file(repo1.join("docs").join("guide.md")).unwrap();
-    let result3 = ulysses_link::scanner::full_scan(&config, &mut manifest);
+    let result3 = ulysses_link::scanner::full_scan(&config, &mut manifests);
     assert_eq!(result3.pruned, 1, "Should prune one stale entry");
     assert!(!output.join("repo1").join("docs").join("guide.md").exists());
 }
@@ -142,8 +155,8 @@ fn test_repo_name_collision_in_mirror() {
     assert_eq!(config.repos[0].name, "project");
     assert_eq!(config.repos[1].name, "project-2");
 
-    let mut manifest = ulysses_link::manifest::Manifest::load(&output).unwrap();
-    let result = ulysses_link::scanner::full_scan(&config, &mut manifest);
+    let mut manifests = load_manifests(&config);
+    let result = ulysses_link::scanner::full_scan(&config, &mut manifests);
     assert_eq!(result.created, 2);
 
     // Both should have their own mirror directory
@@ -171,9 +184,9 @@ fn test_source_edit_propagates_to_mirror() {
     let config_path_str = create_test_config(&[repo.as_path()], &output, tmp.path());
     let config_path = std::path::PathBuf::from(&config_path_str);
     let config = ulysses_link::config::load_config(Some(&config_path)).unwrap();
-    let mut manifest = ulysses_link::manifest::Manifest::load(&output).unwrap();
+    let mut manifests = load_manifests(&config);
 
-    ulysses_link::scanner::full_scan(&config, &mut manifest);
+    ulysses_link::scanner::full_scan(&config, &mut manifests);
     assert_eq!(
         fs::read_to_string(output.join("repo").join("README.md")).unwrap(),
         "original"
@@ -181,7 +194,7 @@ fn test_source_edit_propagates_to_mirror() {
 
     // Edit source
     fs::write(repo.join("README.md"), "updated").unwrap();
-    ulysses_link::scanner::full_scan(&config, &mut manifest);
+    ulysses_link::scanner::full_scan(&config, &mut manifests);
 
     assert_eq!(
         fs::read_to_string(output.join("repo").join("README.md")).unwrap(),
@@ -200,13 +213,13 @@ fn test_mirror_edit_propagates_to_source() {
     let config_path_str = create_test_config(&[repo.as_path()], &output, tmp.path());
     let config_path = std::path::PathBuf::from(&config_path_str);
     let config = ulysses_link::config::load_config(Some(&config_path)).unwrap();
-    let mut manifest = ulysses_link::manifest::Manifest::load(&output).unwrap();
+    let mut manifests = load_manifests(&config);
 
-    ulysses_link::scanner::full_scan(&config, &mut manifest);
+    ulysses_link::scanner::full_scan(&config, &mut manifests);
 
     // Edit mirror
     fs::write(output.join("repo").join("README.md"), "edited in ulysses").unwrap();
-    ulysses_link::scanner::full_scan(&config, &mut manifest);
+    ulysses_link::scanner::full_scan(&config, &mut manifests);
 
     assert_eq!(
         fs::read_to_string(repo.join("README.md")).unwrap(),
@@ -225,9 +238,9 @@ fn test_non_overlapping_edits_merge() {
     let config_path_str = create_test_config(&[repo.as_path()], &output, tmp.path());
     let config_path = std::path::PathBuf::from(&config_path_str);
     let config = ulysses_link::config::load_config(Some(&config_path)).unwrap();
-    let mut manifest = ulysses_link::manifest::Manifest::load(&output).unwrap();
+    let mut manifests = load_manifests(&config);
 
-    ulysses_link::scanner::full_scan(&config, &mut manifest);
+    ulysses_link::scanner::full_scan(&config, &mut manifests);
 
     // Source edits line1, mirror edits line3
     fs::write(repo.join("README.md"), "LINE1\nline2\nline3\n").unwrap();
@@ -237,7 +250,7 @@ fn test_non_overlapping_edits_merge() {
     )
     .unwrap();
 
-    let result = ulysses_link::scanner::full_scan(&config, &mut manifest);
+    let result = ulysses_link::scanner::full_scan(&config, &mut manifests);
     assert_eq!(result.merged, 1);
 
     let content = fs::read_to_string(repo.join("README.md")).unwrap();
@@ -261,15 +274,15 @@ fn test_conflicting_edits_create_conflict_file() {
     let config_path_str = create_test_config(&[repo.as_path()], &output, tmp.path());
     let config_path = std::path::PathBuf::from(&config_path_str);
     let config = ulysses_link::config::load_config(Some(&config_path)).unwrap();
-    let mut manifest = ulysses_link::manifest::Manifest::load(&output).unwrap();
+    let mut manifests = load_manifests(&config);
 
-    ulysses_link::scanner::full_scan(&config, &mut manifest);
+    ulysses_link::scanner::full_scan(&config, &mut manifests);
 
     // Both edit same line
     fs::write(repo.join("README.md"), "source version\n").unwrap();
     fs::write(output.join("repo").join("README.md"), "mirror version\n").unwrap();
 
-    let result = ulysses_link::scanner::full_scan(&config, &mut manifest);
+    let result = ulysses_link::scanner::full_scan(&config, &mut manifests);
     assert_eq!(result.conflicts, 1);
 
     // Check that a conflict file exists somewhere
@@ -298,14 +311,14 @@ fn test_delete_from_source_propagates() {
     let config_path_str = create_test_config(&[repo.as_path()], &output, tmp.path());
     let config_path = std::path::PathBuf::from(&config_path_str);
     let config = ulysses_link::config::load_config(Some(&config_path)).unwrap();
-    let mut manifest = ulysses_link::manifest::Manifest::load(&output).unwrap();
+    let mut manifests = load_manifests(&config);
 
-    ulysses_link::scanner::full_scan(&config, &mut manifest);
+    ulysses_link::scanner::full_scan(&config, &mut manifests);
     assert!(output.join("repo").join("README.md").exists());
 
     // Delete source
     fs::remove_file(repo.join("README.md")).unwrap();
-    let result = ulysses_link::scanner::full_scan(&config, &mut manifest);
+    let result = ulysses_link::scanner::full_scan(&config, &mut manifests);
     assert_eq!(result.pruned, 1);
     assert!(!output.join("repo").join("README.md").exists());
 }
@@ -330,9 +343,9 @@ fn test_non_owned_files_never_touched() {
     let config_path_str = create_test_config(&[repo.as_path()], &output, tmp.path());
     let config_path = std::path::PathBuf::from(&config_path_str);
     let config = ulysses_link::config::load_config(Some(&config_path)).unwrap();
-    let mut manifest = ulysses_link::manifest::Manifest::load(&output).unwrap();
+    let mut manifests = load_manifests(&config);
 
-    ulysses_link::scanner::full_scan(&config, &mut manifest);
+    ulysses_link::scanner::full_scan(&config, &mut manifests);
 
     // Non-owned files should still exist
     assert!(output.join("repo").join(".Ulysses-Group.plist").exists());
@@ -360,16 +373,76 @@ fn test_manifest_persisted_across_scans() {
     let config_path = std::path::PathBuf::from(&config_path_str);
     let config = ulysses_link::config::load_config(Some(&config_path)).unwrap();
 
-    // First scan with fresh manifest
-    let mut manifest = ulysses_link::manifest::Manifest::load(&output).unwrap();
-    ulysses_link::scanner::full_scan(&config, &mut manifest);
+    // First scan with fresh manifests
+    let mut manifests = load_manifests(&config);
+    ulysses_link::scanner::full_scan(&config, &mut manifests);
 
-    // Load manifest from disk (simulating a new process)
-    let mut manifest2 = ulysses_link::manifest::Manifest::load(&output).unwrap();
+    // Load manifests from disk (simulating a new process)
+    let mut manifests2 = load_manifests(&config);
+    let manifest2 = manifests2.get(&config.repos[0].output_dir).unwrap();
     assert!(manifest2.get("repo/README.md").is_some());
 
     // Second scan should recognize files as already existing
-    let result = ulysses_link::scanner::full_scan(&config, &mut manifest2);
+    let result = ulysses_link::scanner::full_scan(&config, &mut manifests2);
     assert_eq!(result.created, 0);
     assert_eq!(result.already_existed, 1);
+}
+
+#[test]
+fn test_per_repo_output_dir() {
+    let tmp = TempDir::new().unwrap();
+
+    let repo1 = tmp.path().join("repo1");
+    let repo2 = tmp.path().join("repo2");
+    let output1 = tmp.path().join("output1");
+    let output2 = tmp.path().join("output2");
+
+    fs::create_dir_all(&repo1).unwrap();
+    fs::create_dir_all(&repo2).unwrap();
+
+    fs::write(repo1.join("README.md"), "repo 1").unwrap();
+    fs::write(repo2.join("README.md"), "repo 2").unwrap();
+
+    let config_content = format!(
+        "version = 1\noutput_dir = \"{}\"\n\n[[repos]]\npath = \"{}\"\n\n[[repos]]\npath = \"{}\"\noutput_dir = \"{}\"",
+        output1.display(),
+        repo1.display(),
+        repo2.display(),
+        output2.display(),
+    );
+    let config_path = tmp.path().join("ulysses-link.toml");
+    fs::write(&config_path, &config_content).unwrap();
+
+    let config = ulysses_link::config::load_config(Some(&config_path)).unwrap();
+    assert_eq!(
+        config.repos[0].output_dir,
+        std::fs::canonicalize(&output1).unwrap()
+    );
+    assert_eq!(
+        config.repos[1].output_dir,
+        std::fs::canonicalize(&output2).unwrap()
+    );
+
+    let mut manifests = load_manifests(&config);
+    let result = ulysses_link::scanner::full_scan(&config, &mut manifests);
+    assert_eq!(result.created, 2);
+
+    // Files should appear in their respective output dirs
+    let canon_out1 = std::fs::canonicalize(&output1).unwrap();
+    let canon_out2 = std::fs::canonicalize(&output2).unwrap();
+    assert!(canon_out1.join("repo1").join("README.md").exists());
+    assert!(canon_out2.join("repo2").join("README.md").exists());
+
+    // Files should NOT appear in the wrong output dir
+    assert!(!canon_out1.join("repo2").exists());
+    assert!(!canon_out2.join("repo1").exists());
+
+    assert_eq!(
+        fs::read_to_string(canon_out1.join("repo1").join("README.md")).unwrap(),
+        "repo 1"
+    );
+    assert_eq!(
+        fs::read_to_string(canon_out2.join("repo2").join("README.md")).unwrap(),
+        "repo 2"
+    );
 }

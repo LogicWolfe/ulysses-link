@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -16,9 +17,9 @@ use crate::watcher::{self, ConfigWatcher, MirrorWatcher, RepoWatcher};
 pub struct MirrorEngine {
     config: Config,
     watchers: HashMap<String, RepoWatcher>,
-    mirror_watcher: Option<MirrorWatcher>,
+    mirror_watchers: HashMap<PathBuf, MirrorWatcher>,
     config_watcher: Option<ConfigWatcher>,
-    manifest: Arc<Mutex<Manifest>>,
+    manifests: HashMap<PathBuf, Arc<Mutex<Manifest>>>,
     running: Arc<AtomicBool>,
     last_scan_at: Instant,
     last_scan_duration: Duration,
@@ -29,28 +30,43 @@ impl MirrorEngine {
         Self {
             config,
             watchers: HashMap::new(),
-            mirror_watcher: None,
+            mirror_watchers: HashMap::new(),
             config_watcher: None,
-            manifest: Arc::new(Mutex::new(Manifest::empty())),
+            manifests: HashMap::new(),
             running: Arc::new(AtomicBool::new(false)),
             last_scan_at: Instant::now(),
             last_scan_duration: Duration::ZERO,
         }
     }
 
-    /// Start the engine: load manifest, full scan, start watchers, enter main loop.
+    /// Start the engine: load manifests, full scan, start watchers, enter main loop.
     pub fn start(&mut self) -> Result<()> {
         info!("Starting ulysses-link engine");
 
-        // Load manifest
-        let loaded_manifest = Manifest::load(&self.config.output_dir)?;
-        self.manifest = Arc::new(Mutex::new(loaded_manifest));
+        // Load one manifest per unique output_dir
+        for output_dir in self.config.active_output_dirs() {
+            let loaded = Manifest::load(&output_dir)?;
+            self.manifests
+                .insert(output_dir, Arc::new(Mutex::new(loaded)));
+        }
 
         // Initial full scan
         let scan_start = Instant::now();
         let result = {
-            let mut manifest = self.manifest.lock().unwrap();
-            full_scan(&self.config, &mut manifest)
+            let mut unlocked: HashMap<PathBuf, Manifest> = self
+                .manifests
+                .iter()
+                .map(|(k, v)| (k.clone(), v.lock().unwrap().clone()))
+                .collect();
+            let r = full_scan(&self.config, &mut unlocked);
+            for (k, v) in unlocked {
+                if let Some(arc) = self.manifests.get(&k) {
+                    *arc.lock().unwrap() = v;
+                } else {
+                    self.manifests.insert(k, Arc::new(Mutex::new(v)));
+                }
+            }
+            r
         };
         self.last_scan_duration = scan_start.elapsed();
         self.last_scan_at = Instant::now();
@@ -69,8 +85,10 @@ impl MirrorEngine {
             self.start_repo_watcher(repo_config);
         }
 
-        // Start mirror watcher on output_dir
-        self.start_mirror_watcher();
+        // Start one mirror watcher per unique output_dir
+        for output_dir in self.config.active_output_dirs() {
+            self.start_mirror_watcher(&output_dir);
+        }
 
         // Start config file watcher
         if let Some(ref config_path) = self.config.config_path {
@@ -115,11 +133,11 @@ impl MirrorEngine {
         }
         self.watchers.clear();
 
-        if let Some(ref mut mw) = self.mirror_watcher {
-            debug!("Stopping mirror watcher");
-            mw.cancel();
+        for (dir, watcher) in &mut self.mirror_watchers {
+            debug!("Stopping mirror watcher on {}", dir.display());
+            watcher.cancel();
         }
-        self.mirror_watcher = None;
+        self.mirror_watchers.clear();
         self.config_watcher = None;
 
         info!("Engine stopped");
@@ -145,85 +163,161 @@ impl MirrorEngine {
             }
         };
 
-        // Detect output_dir change — must reload manifest and restart mirror watcher
-        let output_dir_changed = self.config.output_dir != new_config.output_dir;
-        let mut output_dir_moved = false;
-        if output_dir_changed {
+        let old_active = self.config.active_output_dirs();
+        let new_active = new_config.active_output_dirs();
+
+        let old_active_set: HashSet<PathBuf> = old_active.iter().cloned().collect();
+        let new_active_set: HashSet<PathBuf> = new_active.iter().cloned().collect();
+
+        // Determine if this is a simple global move:
+        // ALL old repos shared one output_dir and ALL new repos share one (different) output_dir.
+        let is_simple_global_move =
+            old_active.len() == 1 && new_active.len() == 1 && old_active[0] != new_active[0];
+
+        if is_simple_global_move {
+            let old_dir = &old_active[0];
+            let new_dir = &new_active[0];
             info!(
-                "output_dir changed: {} -> {}",
-                self.config.output_dir.display(),
-                new_config.output_dir.display(),
+                "Global output_dir changed: {} -> {}",
+                old_dir.display(),
+                new_dir.display(),
             );
 
-            // Stop the mirror watcher on the old output_dir to prevent
-            // deletions there from propagating to source files
-            if let Some(ref mut mw) = self.mirror_watcher {
+            // Stop mirror watcher on old dir to prevent deletions from propagating
+            if let Some(mut mw) = self.mirror_watchers.remove(old_dir) {
                 mw.cancel();
             }
-            self.mirror_watcher = None;
 
             // Try to move the old output_dir to the new location
-            match linker::move_output_dir(&self.config.output_dir, &new_config.output_dir) {
-                Ok(true) => output_dir_moved = true,
+            let mut moved = false;
+            match linker::move_output_dir(old_dir, new_dir) {
+                Ok(true) => {
+                    moved = true;
+                    info!("Output directory moved successfully");
+                }
                 Ok(false) => {}
                 Err(e) => {
                     warn!("Failed to move output_dir, will re-scan: {}", e);
                 }
             }
 
-            // Load manifest from the new output_dir (either moved or fresh)
-            match Manifest::load(&new_config.output_dir) {
-                Ok(m) => self.manifest = Arc::new(Mutex::new(m)),
+            // Load manifest from new location
+            match Manifest::load(new_dir) {
+                Ok(m) => {
+                    self.manifests.remove(old_dir);
+                    self.manifests
+                        .insert(new_dir.clone(), Arc::new(Mutex::new(m)));
+                }
                 Err(e) => {
                     error!("Failed to load manifest from new output_dir: {}", e);
                     return;
                 }
             }
+
+            if moved {
+                info!("Running reconciliation scan after move");
+            } else {
+                info!("Re-scanning all repos into new output_dir");
+            }
         }
 
+        // Build repo name maps for diffing
         let old_names: HashSet<String> = self.config.repos.iter().map(|r| r.name.clone()).collect();
         let new_names: HashSet<String> = new_config.repos.iter().map(|r| r.name.clone()).collect();
 
-        let new_repos: Vec<RepoConfig> = new_config.repos.clone();
-        let new_repos_by_name: HashMap<String, RepoConfig> =
-            new_repos.into_iter().map(|r| (r.name.clone(), r)).collect();
+        let new_repos_by_name: HashMap<String, RepoConfig> = new_config
+            .repos
+            .iter()
+            .map(|r| (r.name.clone(), r.clone()))
+            .collect();
+        let old_repos_by_name: HashMap<String, RepoConfig> = self
+            .config
+            .repos
+            .iter()
+            .map(|r| (r.name.clone(), r.clone()))
+            .collect();
 
-        let old_repos: Vec<RepoConfig> = self.config.repos.clone();
-        let old_repos_by_name: HashMap<String, RepoConfig> =
-            old_repos.into_iter().map(|r| (r.name.clone(), r)).collect();
-
-        // Removed repos
+        // Removed repos: prune mirrors from their old output_dir
         for name in old_names.difference(&new_names) {
             info!("Repo removed from config: {}", name);
             self.stop_repo_watcher(name);
-            let mut manifest = self.manifest.lock().unwrap();
-            let _ = linker::remove_repo_mirror(name, &self.config.output_dir, &mut manifest);
+            let old_rc = &old_repos_by_name[name];
+            if let Some(manifest_arc) = self.manifests.get(&old_rc.output_dir) {
+                let mut manifest = manifest_arc.lock().unwrap();
+                let _ = linker::remove_repo_mirror(name, &old_rc.output_dir, &mut manifest);
+            }
         }
 
-        // Added repos
+        // Load manifests for newly active output_dirs
+        for dir in new_active_set.difference(&old_active_set) {
+            match Manifest::load(dir) {
+                Ok(m) => {
+                    self.manifests.insert(dir.clone(), Arc::new(Mutex::new(m)));
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to load manifest for new output_dir {}: {}",
+                        dir.display(),
+                        e
+                    );
+                }
+            }
+        }
+
         let mut repos_changed = false;
+
+        // Added repos
         for name in new_names.difference(&old_names) {
             info!("New repo in config: {}", name);
             if let Some(repo_config) = new_repos_by_name.get(name) {
-                let mut manifest = self.manifest.lock().unwrap();
-                scan_repo(repo_config, &new_config.output_dir, &mut manifest);
-                drop(manifest);
+                if let Some(manifest_arc) = self.manifests.get(&repo_config.output_dir) {
+                    let mut manifest = manifest_arc.lock().unwrap();
+                    scan_repo(repo_config, &repo_config.output_dir, &mut manifest);
+                }
                 self.start_repo_watcher(repo_config);
                 repos_changed = true;
             }
         }
 
-        // Changed repos
+        // Changed repos (includes output_dir changes)
         for name in old_names.intersection(&new_names) {
             let old_rc = &old_repos_by_name[name];
             let new_rc = &new_repos_by_name[name];
 
-            if old_rc.include_patterns != new_rc.include_patterns || old_rc.path != new_rc.path {
+            let output_dir_changed = old_rc.output_dir != new_rc.output_dir;
+            let patterns_changed =
+                old_rc.include_patterns != new_rc.include_patterns || old_rc.path != new_rc.path;
+
+            if output_dir_changed {
+                info!(
+                    "Repo '{}' output_dir changed: {} -> {}, re-scanning",
+                    name,
+                    old_rc.output_dir.display(),
+                    new_rc.output_dir.display()
+                );
+                self.stop_repo_watcher(name);
+
+                // Prune old mirror (don't move — could share output_dir with other repos)
+                if let Some(manifest_arc) = self.manifests.get(&old_rc.output_dir) {
+                    let mut manifest = manifest_arc.lock().unwrap();
+                    let _ = linker::remove_repo_mirror(name, &old_rc.output_dir, &mut manifest);
+                }
+
+                // Scan into new output_dir
+                if let Some(manifest_arc) = self.manifests.get(&new_rc.output_dir) {
+                    let mut manifest = manifest_arc.lock().unwrap();
+                    scan_repo(new_rc, &new_rc.output_dir, &mut manifest);
+                }
+
+                self.start_repo_watcher(new_rc);
+                repos_changed = true;
+            } else if patterns_changed {
                 info!("Repo config changed, re-scanning: {}", name);
                 self.stop_repo_watcher(name);
-                let mut manifest = self.manifest.lock().unwrap();
-                scan_repo(new_rc, &new_config.output_dir, &mut manifest);
-                drop(manifest);
+                if let Some(manifest_arc) = self.manifests.get(&new_rc.output_dir) {
+                    let mut manifest = manifest_arc.lock().unwrap();
+                    scan_repo(new_rc, &new_rc.output_dir, &mut manifest);
+                }
                 self.start_repo_watcher(new_rc);
                 repos_changed = true;
             }
@@ -231,16 +325,22 @@ impl MirrorEngine {
 
         self.config = new_config;
 
-        if output_dir_changed {
-            if output_dir_moved {
-                info!("Output directory moved successfully, running reconciliation scan");
-            } else {
-                info!("Re-scanning all repos into new output_dir");
-            }
+        // If this was a simple global move, do a full re-scan for reconciliation
+        if is_simple_global_move {
             let scan_start = Instant::now();
             let result = {
-                let mut manifest = self.manifest.lock().unwrap();
-                full_scan(&self.config, &mut manifest)
+                let mut unlocked: HashMap<PathBuf, Manifest> = self
+                    .manifests
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.lock().unwrap().clone()))
+                    .collect();
+                let r = full_scan(&self.config, &mut unlocked);
+                for (k, v) in unlocked {
+                    if let Some(arc) = self.manifests.get(&k) {
+                        *arc.lock().unwrap() = v;
+                    }
+                }
+                r
             };
             self.last_scan_duration = scan_start.elapsed();
             self.last_scan_at = Instant::now();
@@ -258,20 +358,54 @@ impl MirrorEngine {
             for repo_config in &repos {
                 self.start_repo_watcher(repo_config);
             }
-
-            // Start mirror watcher on new output_dir
-            self.start_mirror_watcher();
         } else if repos_changed {
             self.last_scan_at = Instant::now();
+        }
+
+        // Reconcile mirror watchers: stop removed, start added
+        let final_active: HashSet<PathBuf> = self.config.active_output_dirs().into_iter().collect();
+        let current_watched: HashSet<PathBuf> = self.mirror_watchers.keys().cloned().collect();
+
+        for dir in current_watched.difference(&final_active) {
+            if let Some(mut mw) = self.mirror_watchers.remove(dir) {
+                debug!("Stopping mirror watcher on {}", dir.display());
+                mw.cancel();
+            }
+        }
+        for dir in final_active.difference(&current_watched) {
+            self.start_mirror_watcher(dir);
+        }
+
+        // Drop manifests for output_dirs no longer in use
+        let stale_dirs: Vec<PathBuf> = self
+            .manifests
+            .keys()
+            .filter(|k| !final_active.contains(*k))
+            .cloned()
+            .collect();
+        for dir in stale_dirs {
+            self.manifests.remove(&dir);
         }
     }
 
     fn start_repo_watcher(&mut self, repo_config: &RepoConfig) {
+        let manifest_arc = match self.manifests.get(&repo_config.output_dir) {
+            Some(m) => Arc::clone(m),
+            None => {
+                error!(
+                    "No manifest for output_dir {} when starting watcher for {}",
+                    repo_config.output_dir.display(),
+                    repo_config.name
+                );
+                return;
+            }
+        };
+
         match watcher::create_watcher(
             repo_config,
-            &self.config.output_dir,
+            &repo_config.output_dir,
             self.config.debounce_seconds,
-            Arc::clone(&self.manifest),
+            manifest_arc,
         ) {
             Ok(w) => {
                 debug!("Started watcher for {}", repo_config.name);
@@ -293,23 +427,28 @@ impl MirrorEngine {
         }
     }
 
-    fn start_mirror_watcher(&mut self) {
-        match watcher::create_mirror_watcher(
-            &self.config.output_dir,
-            self.config.debounce_seconds,
-            Arc::clone(&self.manifest),
-        ) {
-            Ok(w) => {
-                debug!(
-                    "Started mirror watcher on {}",
-                    self.config.output_dir.display()
+    fn start_mirror_watcher(&mut self, output_dir: &Path) {
+        let manifest_arc = match self.manifests.get(output_dir) {
+            Some(m) => Arc::clone(m),
+            None => {
+                error!(
+                    "No manifest for output_dir {} when starting mirror watcher",
+                    output_dir.display()
                 );
-                self.mirror_watcher = Some(w);
+                return;
+            }
+        };
+
+        match watcher::create_mirror_watcher(output_dir, self.config.debounce_seconds, manifest_arc)
+        {
+            Ok(w) => {
+                debug!("Started mirror watcher on {}", output_dir.display());
+                self.mirror_watchers.insert(output_dir.to_path_buf(), w);
             }
             Err(e) => {
                 error!(
                     "Failed to start mirror watcher on {}: {}",
-                    self.config.output_dir.display(),
+                    output_dir.display(),
                     e
                 );
             }
@@ -365,8 +504,18 @@ impl MirrorEngine {
                     info!("Periodic rescan");
                     let scan_start = Instant::now();
                     let result = {
-                        let mut manifest = self.manifest.lock().unwrap();
-                        full_scan(&self.config, &mut manifest)
+                        let mut unlocked: HashMap<PathBuf, Manifest> = self
+                            .manifests
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.lock().unwrap().clone()))
+                            .collect();
+                        let r = full_scan(&self.config, &mut unlocked);
+                        for (k, v) in unlocked {
+                            if let Some(arc) = self.manifests.get(&k) {
+                                *arc.lock().unwrap() = v;
+                            }
+                        }
+                        r
                     };
                     self.last_scan_duration = scan_start.elapsed();
                     self.last_scan_at = Instant::now();

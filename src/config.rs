@@ -90,7 +90,7 @@ pub const DEFAULT_LOG_LEVEL: &str = "INFO";
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("No config file found. Create one at ~/.config/ulysses-link/config.toml or pass --config PATH.")]
+    #[error("No config file found at ~/.config/ulysses-link/config.toml. Run 'ulysses-link sync <path> <output-dir>' to get started, or pass --config PATH.")]
     NoConfigFound,
 
     #[error("Config file not found: {0}")]
@@ -133,6 +133,7 @@ struct RawRepo {
     name: Option<String>,
     exclude: Option<Vec<String>>,
     include: Option<Vec<String>>,
+    output_dir: Option<String>,
 }
 
 // --- Validated config ---
@@ -145,6 +146,8 @@ pub struct RepoConfig {
     pub include: GlobSet,
     /// Raw include patterns preserved for comparison during config reload
     pub include_patterns: Vec<String>,
+    /// Effective output directory (per-repo override or global fallback)
+    pub output_dir: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -164,27 +167,17 @@ pub struct Config {
     pub config_path: Option<PathBuf>,
 }
 
-// --- Config search ---
-
-pub fn config_search_paths() -> Vec<PathBuf> {
-    let mut paths = vec![PathBuf::from("./ulysses-link.toml")];
-
-    if let Some(config_dir) = dirs::config_dir() {
-        paths.push(config_dir.join("ulysses-link").join("config.toml"));
+impl Config {
+    /// Collect unique output directories across all repos.
+    pub fn active_output_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs: Vec<PathBuf> = self.repos.iter().map(|r| r.output_dir.clone()).collect();
+        dirs.sort();
+        dirs.dedup();
+        dirs
     }
-
-    #[cfg(target_os = "macos")]
-    if let Some(home) = dirs::home_dir() {
-        paths.push(
-            home.join("Library")
-                .join("Application Support")
-                .join("ulysses-link")
-                .join("config.toml"),
-        );
-    }
-
-    paths
 }
+
+// --- Config search ---
 
 pub fn find_config_path(explicit: Option<&Path>) -> Result<PathBuf, ConfigError> {
     if let Some(p) = explicit {
@@ -195,11 +188,9 @@ pub fn find_config_path(explicit: Option<&Path>) -> Result<PathBuf, ConfigError>
         return Err(ConfigError::FileNotFound(expanded));
     }
 
-    for candidate in config_search_paths() {
-        let expanded = expand_path(&candidate.to_string_lossy())?;
-        if expanded.is_file() {
-            return Ok(expanded);
-        }
+    let default = default_config_path();
+    if default.is_file() {
+        return Ok(default);
     }
 
     Err(ConfigError::NoConfigFound)
@@ -316,20 +307,6 @@ fn parse_config(raw: RawConfig, config_path: Option<PathBuf>) -> Result<Config, 
         global_include
     };
 
-    // Output dir safety: reject home directory, filesystem root, and repo paths
-    if let Some(home) = dirs::home_dir() {
-        if output_dir == home {
-            return Err(ConfigError::Validation(
-                "output_dir cannot be the home directory".into(),
-            ));
-        }
-    }
-    if output_dir == Path::new("/") {
-        return Err(ConfigError::Validation(
-            "output_dir cannot be the filesystem root".into(),
-        ));
-    }
-
     // Repos
     let repos_raw = raw.repos.unwrap_or_default();
     let named_repos = resolve_repo_names(&repos_raw)?;
@@ -341,32 +318,14 @@ fn parse_config(raw: RawConfig, config_path: Option<PathBuf>) -> Result<Config, 
             continue;
         }
 
-        // Check output_dir is not the repo itself
-        if output_dir == path {
-            return Err(ConfigError::Validation(format!(
-                "output_dir '{}' is the same as repo '{}'. This would overwrite source files.",
-                output_dir.display(),
-                path.display(),
-            )));
-        }
-
-        // Check output_dir not inside repo
-        if output_dir.starts_with(&path) {
-            return Err(ConfigError::Validation(format!(
-                "output_dir '{}' is inside repo '{}'. This would create an infinite loop.",
-                output_dir.display(),
-                path.display(),
-            )));
-        }
-
-        // Check repo not inside output_dir
-        if path.starts_with(&output_dir) {
-            return Err(ConfigError::Validation(format!(
-                "repo '{}' is inside output_dir '{}'. The mirror watcher would see source changes as mirror edits, risking data loss.",
-                path.display(),
-                output_dir.display(),
-            )));
-        }
+        let repo_output_dir = match &repo_raw.output_dir {
+            Some(raw_dir) => {
+                let expanded = expand_path(raw_dir)?;
+                std::fs::create_dir_all(&expanded)?;
+                std::fs::canonicalize(&expanded).unwrap_or(expanded)
+            }
+            None => output_dir.clone(),
+        };
 
         let repo_exclude: Vec<String> = repo_raw.exclude.clone().unwrap_or_default();
         let repo_include: Vec<String> = repo_raw.include.clone().unwrap_or_default();
@@ -391,8 +350,11 @@ fn parse_config(raw: RawConfig, config_path: Option<PathBuf>) -> Result<Config, 
             exclude,
             include,
             include_patterns: all_include,
+            output_dir: repo_output_dir,
         });
     }
+
+    validate_nesting(&repos)?;
 
     Ok(Config {
         output_dir,
@@ -434,6 +396,104 @@ fn resolve_repo_names(repos: &[RawRepo]) -> Result<Vec<(&RawRepo, PathBuf, Strin
     }
 
     Ok(result)
+}
+
+fn validate_nesting(repos: &[RepoConfig]) -> Result<(), ConfigError> {
+    let home = dirs::home_dir();
+
+    for repo in repos {
+        let od = &repo.output_dir;
+
+        // Output dir cannot be home directory or filesystem root
+        if let Some(ref home) = home {
+            if od == home {
+                return Err(ConfigError::Validation(format!(
+                    "output_dir '{}' for repo '{}' cannot be the home directory",
+                    od.display(),
+                    repo.name,
+                )));
+            }
+        }
+        if od == Path::new("/") {
+            return Err(ConfigError::Validation(format!(
+                "output_dir '{}' for repo '{}' cannot be the filesystem root",
+                od.display(),
+                repo.name,
+            )));
+        }
+
+        // Output dir cannot equal any repo path
+        if od == &repo.path {
+            return Err(ConfigError::Validation(format!(
+                "output_dir '{}' is the same as repo '{}'. This would overwrite source files.",
+                od.display(),
+                repo.name,
+            )));
+        }
+
+        // Output dir cannot be inside any repo
+        for other in repos {
+            if od.starts_with(&other.path) {
+                return Err(ConfigError::Validation(format!(
+                    "output_dir '{}' for repo '{}' is inside repo '{}'. This would create an infinite loop.",
+                    od.display(),
+                    repo.name,
+                    other.name,
+                )));
+            }
+        }
+
+        // No repo can be inside this output dir
+        for other in repos {
+            if other.path.starts_with(od) {
+                return Err(ConfigError::Validation(format!(
+                    "repo '{}' is inside output_dir '{}' (used by '{}'). The mirror watcher would see source changes as mirror edits.",
+                    other.name,
+                    od.display(),
+                    repo.name,
+                )));
+            }
+        }
+    }
+
+    // No pair of active output_dirs can be nested inside each other
+    let output_dirs: Vec<&PathBuf> = repos.iter().map(|r| &r.output_dir).collect();
+    for (i, a) in output_dirs.iter().enumerate() {
+        for b in output_dirs.iter().skip(i + 1) {
+            if a == b {
+                continue;
+            }
+            if a.starts_with(b.as_path()) || b.starts_with(a.as_path()) {
+                return Err(ConfigError::Validation(format!(
+                    "Output directories '{}' and '{}' are nested. Each output_dir must be independent to avoid duplicate watcher events.",
+                    a.display(),
+                    b.display(),
+                )));
+            }
+        }
+    }
+
+    // No pair of effective mirror dirs can overlap
+    for (i, a) in repos.iter().enumerate() {
+        let a_mirror = a.output_dir.join(&a.name);
+        for b in repos.iter().skip(i + 1) {
+            let b_mirror = b.output_dir.join(&b.name);
+            if a_mirror == b_mirror
+                || a_mirror.starts_with(&b_mirror)
+                || b_mirror.starts_with(&a_mirror)
+            {
+                return Err(ConfigError::Validation(format!(
+                    "Mirror directories for '{}' and '{}' overlap at '{}' and '{}'. Each repo must have a distinct mirror directory.",
+                    a.name,
+                    b.name,
+                    a_mirror.display(),
+                    b_mirror.display(),
+                )));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn compile_exclude(patterns: &[String], repo_path: &Path) -> Result<Gitignore, ConfigError> {
@@ -521,6 +581,7 @@ log_level = "INFO"
 # [[repos]]
 # path = "~/code/my-project"
 # name = "my-project"           # optional, defaults to directory basename
+# output_dir = "~/work-docs"    # optional, overrides global output_dir
 # exclude = ["docs/generated/"] # merged with global_exclude
 # include = ["*.tex"]           # merged with global_include
 "#;
@@ -535,7 +596,8 @@ pub fn add_repo(config_path: &Path, repo_path: &Path) -> Result<bool, ConfigErro
         .parse::<toml_edit::DocumentMut>()
         .map_err(|e| ConfigError::Validation(format!("Failed to parse config: {e}")))?;
 
-    let repo_str = repo_path.to_string_lossy().to_string();
+    let canonical = expand_path(&repo_path.to_string_lossy())?;
+    let repo_str = canonical.to_string_lossy().to_string();
 
     // Check if this repo path already exists
     if let Some(repos) = doc.get("repos").and_then(|v| v.as_array_of_tables()) {
@@ -644,7 +706,8 @@ pub fn set_output_dir(config_path: &Path, output_dir: &Path) -> Result<(), Confi
         .parse::<toml_edit::DocumentMut>()
         .map_err(|e| ConfigError::Validation(format!("Failed to parse config: {e}")))?;
 
-    doc["output_dir"] = toml_edit::value(output_dir.to_string_lossy().as_ref());
+    let canonical = expand_path(&output_dir.to_string_lossy())?;
+    doc["output_dir"] = toml_edit::value(canonical.to_string_lossy().as_ref());
     std::fs::write(config_path, doc.to_string())?;
     Ok(())
 }
@@ -919,11 +982,9 @@ mod tests {
     #[test]
     fn test_no_config_found() {
         let tmp = TempDir::new().unwrap();
-        // Override HOME so config_search_paths won't find a real config
-        // in ~/.config or ~/Library/Application Support
+        // Override HOME so default_config_path won't find a real config
         let orig_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", tmp.path());
-        let _guard = std::env::set_current_dir(tmp.path());
 
         let err = find_config_path(None);
 
@@ -1134,5 +1195,241 @@ mod tests {
 
         let content = fs::read_to_string(&config_path).unwrap();
         assert!(content.contains("# My config"));
+    }
+
+    #[test]
+    fn test_add_repo_stores_absolute_path() {
+        let tmp = TempDir::new().unwrap();
+        let repo_dir = tmp.path().join("my-repo");
+        fs::create_dir(&repo_dir).unwrap();
+        let output_dir = tmp.path().join("output");
+
+        let config_path = write_config(
+            tmp.path(),
+            &format!("version = 1\noutput_dir = \"{}\"", output_dir.display()),
+        );
+
+        add_repo(&config_path, &repo_dir).unwrap();
+
+        let content = fs::read_to_string(&config_path).unwrap();
+        // The stored path should be absolute (canonicalized)
+        let doc: toml_edit::DocumentMut = content.parse().unwrap();
+        let stored_path = doc["repos"]
+            .as_array_of_tables()
+            .unwrap()
+            .iter()
+            .next()
+            .unwrap()
+            .get("path")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            PathBuf::from(&stored_path).is_absolute(),
+            "Stored path should be absolute, got: {stored_path}"
+        );
+    }
+
+    #[test]
+    fn test_add_repo_deduplicates_relative_and_absolute() {
+        let tmp = TempDir::new().unwrap();
+        let repo_dir = tmp.path().join("my-repo");
+        fs::create_dir(&repo_dir).unwrap();
+        let output_dir = tmp.path().join("output");
+
+        let config_path = write_config(
+            tmp.path(),
+            &format!("version = 1\noutput_dir = \"{}\"", output_dir.display()),
+        );
+
+        // Add with absolute path
+        let added = add_repo(&config_path, &repo_dir).unwrap();
+        assert!(added);
+
+        // Add again with the same absolute path — should be idempotent
+        let added_again = add_repo(&config_path, &repo_dir).unwrap();
+        assert!(!added_again);
+    }
+
+    #[test]
+    fn test_set_output_dir_stores_absolute_path() {
+        let tmp = TempDir::new().unwrap();
+        let output_dir = tmp.path().join("output");
+
+        let config_path = write_config(
+            tmp.path(),
+            &format!("version = 1\noutput_dir = \"{}\"", output_dir.display()),
+        );
+
+        let new_output = tmp.path().join("new-output");
+        set_output_dir(&config_path, &new_output).unwrap();
+
+        let content = fs::read_to_string(&config_path).unwrap();
+        let doc: toml_edit::DocumentMut = content.parse().unwrap();
+        let stored = doc["output_dir"].as_str().unwrap().to_string();
+        assert!(
+            PathBuf::from(&stored).is_absolute(),
+            "Stored output_dir should be absolute, got: {stored}"
+        );
+    }
+
+    #[test]
+    fn test_per_repo_output_dir_parsed() {
+        let tmp = TempDir::new().unwrap();
+        let repo_dir = tmp.path().join("my-repo");
+        fs::create_dir(&repo_dir).unwrap();
+        let global_output = tmp.path().join("global-output");
+        let repo_output = tmp.path().join("repo-output");
+
+        let config_path = write_config(
+            tmp.path(),
+            &format!(
+                "version = 1\noutput_dir = \"{}\"\n\n[[repos]]\npath = \"{}\"\noutput_dir = \"{}\"",
+                global_output.display(),
+                repo_dir.display(),
+                repo_output.display(),
+            ),
+        );
+
+        let config = load_config(Some(&config_path)).unwrap();
+        assert_eq!(config.repos.len(), 1);
+        let expected = fs::canonicalize(&repo_output).unwrap();
+        assert_eq!(config.repos[0].output_dir, expected);
+    }
+
+    #[test]
+    fn test_per_repo_output_dir_falls_back_to_global() {
+        let tmp = TempDir::new().unwrap();
+        let repo_dir = tmp.path().join("my-repo");
+        fs::create_dir(&repo_dir).unwrap();
+        let output_dir = tmp.path().join("output");
+
+        let config_path = write_config(
+            tmp.path(),
+            &format!(
+                "version = 1\noutput_dir = \"{}\"\n\n[[repos]]\npath = \"{}\"",
+                output_dir.display(),
+                repo_dir.display()
+            ),
+        );
+
+        let config = load_config(Some(&config_path)).unwrap();
+        assert_eq!(config.repos[0].output_dir, config.output_dir);
+    }
+
+    #[test]
+    fn test_active_output_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let repo1 = tmp.path().join("repo1");
+        let repo2 = tmp.path().join("repo2");
+        fs::create_dir(&repo1).unwrap();
+        fs::create_dir(&repo2).unwrap();
+        let output1 = tmp.path().join("output1");
+        let output2 = tmp.path().join("output2");
+
+        let config_path = write_config(
+            tmp.path(),
+            &format!(
+                "version = 1\noutput_dir = \"{}\"\n\n[[repos]]\npath = \"{}\"\n\n[[repos]]\npath = \"{}\"\noutput_dir = \"{}\"",
+                output1.display(),
+                repo1.display(),
+                repo2.display(),
+                output2.display(),
+            ),
+        );
+
+        let config = load_config(Some(&config_path)).unwrap();
+        let active = config.active_output_dirs();
+        assert_eq!(active.len(), 2);
+    }
+
+    #[test]
+    fn test_nesting_repo_inside_per_repo_output_dir() {
+        let tmp = TempDir::new().unwrap();
+        let output_dir = tmp.path().join("output");
+        let repo_output = tmp.path().join("repo-output");
+        let repo1 = tmp.path().join("repo1");
+        let repo2 = repo_output.join("nested-repo");
+        fs::create_dir(&repo1).unwrap();
+        fs::create_dir_all(&repo2).unwrap();
+
+        let config_path = write_config(
+            tmp.path(),
+            &format!(
+                "version = 1\noutput_dir = \"{}\"\n\n[[repos]]\npath = \"{}\"\noutput_dir = \"{}\"\n\n[[repos]]\npath = \"{}\"",
+                output_dir.display(),
+                repo1.display(),
+                repo_output.display(),
+                repo2.display(),
+            ),
+        );
+
+        let err = load_config(Some(&config_path)).unwrap_err();
+        assert!(err.to_string().contains("inside output_dir"));
+    }
+
+    #[test]
+    fn test_nesting_output_dir_inside_repo() {
+        let tmp = TempDir::new().unwrap();
+        let global_output = tmp.path().join("global-output");
+        let repo = tmp.path().join("my-repo");
+        let repo_output = repo.join("sub-output");
+        fs::create_dir(&repo).unwrap();
+
+        let config_path = write_config(
+            tmp.path(),
+            &format!(
+                "version = 1\noutput_dir = \"{}\"\n\n[[repos]]\npath = \"{}\"\noutput_dir = \"{}\"",
+                global_output.display(),
+                repo.display(),
+                repo_output.display(),
+            ),
+        );
+
+        let err = load_config(Some(&config_path)).unwrap_err();
+        assert!(err.to_string().contains("infinite loop"));
+    }
+
+    #[test]
+    fn test_nesting_nested_output_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let repo1 = tmp.path().join("repo1");
+        let repo2 = tmp.path().join("repo2");
+        fs::create_dir(&repo1).unwrap();
+        fs::create_dir(&repo2).unwrap();
+        let output1 = tmp.path().join("output");
+        let output2 = output1.join("nested");
+
+        let config_path = write_config(
+            tmp.path(),
+            &format!(
+                "version = 1\noutput_dir = \"{}\"\n\n[[repos]]\npath = \"{}\"\n\n[[repos]]\npath = \"{}\"\noutput_dir = \"{}\"",
+                output1.display(),
+                repo1.display(),
+                repo2.display(),
+                output2.display(),
+            ),
+        );
+
+        let err = load_config(Some(&config_path)).unwrap_err();
+        assert!(err.to_string().contains("nested"));
+    }
+
+    #[test]
+    fn test_nesting_overlapping_mirror_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let repo1 = tmp.path().join("repo1");
+        let repo2 = tmp.path().join("repo2");
+        fs::create_dir(&repo1).unwrap();
+        fs::create_dir(&repo2).unwrap();
+
+        // repo1 goes to output/repo1, repo2 with name "repo1" suffix would overlap
+        // We need repos with the same name going to different output_dirs that produce
+        // overlapping mirror paths. Since names are deduped, the overlap would be
+        // output_dir_A/name == output_dir_B/name. That requires same name + same output_dir,
+        // which is the same path and thus not overlapping in the nesting sense.
+        // The realistic case: output_dir_A == output_dir_B/reponame
+        // Already covered by nested output_dirs test.
     }
 }

@@ -22,7 +22,7 @@ struct ManifestFile {
     files: HashMap<String, ManifestEntry>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Manifest {
     files: HashMap<String, ManifestEntry>,
 }

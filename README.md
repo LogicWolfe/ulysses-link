@@ -91,7 +91,7 @@ ulysses-link version               Print version
 
 ## Config file format
 
-The config file is located at `~/.config/ulysses-link/config.toml`. It is created automatically on the first `sync` and updated by `sync` and `remove`. Tilde (`~`) and environment variables are expanded in all paths.
+The config file is located at `~/.config/ulysses-link/config.toml`. It is created automatically on the first `sync` and updated by `sync` and `remove`. Tilde (`~`) and environment variables are expanded in all paths. Paths provided via `sync` are canonicalized to absolute paths before storing in the config, so the background service always resolves paths correctly regardless of its working directory.
 
 ### Minimal example
 
@@ -119,6 +119,24 @@ include = ["*.tex"]                # also link LaTeX files for this repo
 path = "~/code/another-project"
 ```
 
+### Per-repo output directories
+
+Each repo can override the global `output_dir` to mirror files into a different root:
+
+```toml
+version = 1
+output_dir = "~/ulysses-link"
+
+[[repos]]
+path = "~/code/personal-blog"
+
+[[repos]]
+path = "~/work/internal-docs"
+output_dir = "~/ulysses-work"      # mirrors to ~/ulysses-work/internal-docs/
+```
+
+This is useful when you want to keep work and personal docs in separate Ulysses external folders. Each unique output directory gets its own manifest and mirror watcher.
+
 ### Global options
 
 | Field | Default | Description |
@@ -137,6 +155,7 @@ path = "~/code/another-project"
 |---|---|---|
 | `path` | — | Required. Path to the repository. |
 | `name` | directory basename | Name used for the mirror subdirectory. |
+| `output_dir` | global `output_dir` | Override the global output directory for this repo. Mirror goes to `output_dir/name/`. |
 | `exclude` | `[]` | Additional exclude patterns, merged with `global_exclude`. |
 | `include` | `[]` | Additional include patterns, merged with `global_include`. |
 
@@ -150,7 +169,7 @@ Exclude patterns are checked before includes, so a file like `node_modules/pkg/R
 
 ### Manifest file
 
-The manifest (`.ulysses-link`) is stored in the output directory and tracks every file ulysses-link owns. A base version cache (`.ulysses-link.d/`) stores the last-synced content of each file for three-way merging. Both are managed automatically.
+Each output directory has its own manifest (`.ulysses-link`) that tracks every file ulysses-link owns in that directory. A base version cache (`.ulysses-link.d/`) stores the last-synced content of each file for three-way merging. Both are managed automatically.
 
 ## Development
 

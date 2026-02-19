@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use tracing::{info, warn};
 use walkdir::WalkDir;
@@ -32,11 +33,14 @@ impl ScanResult {
 }
 
 /// Scan all repos and reconcile the mirror tree.
-pub fn full_scan(config: &Config, manifest: &mut Manifest) -> ScanResult {
+pub fn full_scan(config: &Config, manifests: &mut HashMap<PathBuf, Manifest>) -> ScanResult {
     let mut result = ScanResult::default();
 
     for repo_config in &config.repos {
-        let repo_result = scan_repo(repo_config, &config.output_dir, manifest);
+        let manifest = manifests
+            .entry(repo_config.output_dir.clone())
+            .or_insert_with(Manifest::empty);
+        let repo_result = scan_repo(repo_config, &repo_config.output_dir, manifest);
         result.merge(&repo_result);
     }
 
@@ -165,6 +169,16 @@ mod tests {
         config::load_config(Some(&config_file)).unwrap()
     }
 
+    fn make_manifests(config: &Config) -> HashMap<PathBuf, Manifest> {
+        let mut manifests = HashMap::new();
+        for od in config.active_output_dirs() {
+            manifests
+                .entry(od.clone())
+                .or_insert_with(|| Manifest::load(&od).unwrap());
+        }
+        manifests
+    }
+
     #[test]
     fn test_full_scan_creates_copies() {
         let tmp = TempDir::new().unwrap();
@@ -178,8 +192,8 @@ mod tests {
         fs::write(repo.join("main.rs"), "fn main() {}").unwrap();
 
         let config = make_config(&repo, &output);
-        let mut manifest = Manifest::load(&output).unwrap();
-        let result = full_scan(&config, &mut manifest);
+        let mut manifests = make_manifests(&config);
+        let result = full_scan(&config, &mut manifests);
 
         assert_eq!(result.created, 2);
         assert_eq!(result.errors, 0);
@@ -198,6 +212,7 @@ mod tests {
         assert!(!output.join("my-repo").join("main.rs").exists());
 
         // Manifest should track the files
+        let manifest = manifests.get(&config.repos[0].output_dir).unwrap();
         assert!(manifest.get("my-repo/README.md").is_some());
         assert!(manifest.get("my-repo/docs/guide.md").is_some());
     }
@@ -219,8 +234,8 @@ mod tests {
         fs::write(repo.join("README.md"), "root").unwrap();
 
         let config = make_config(&repo, &output);
-        let mut manifest = Manifest::load(&output).unwrap();
-        let result = full_scan(&config, &mut manifest);
+        let mut manifests = make_manifests(&config);
+        let result = full_scan(&config, &mut manifests);
 
         assert_eq!(result.created, 1);
         assert!(output.join("my-repo").join("README.md").exists());
@@ -236,12 +251,12 @@ mod tests {
         fs::write(repo.join("README.md"), "hello").unwrap();
 
         let config = make_config(&repo, &output);
-        let mut manifest = Manifest::load(&output).unwrap();
+        let mut manifests = make_manifests(&config);
 
-        let result1 = full_scan(&config, &mut manifest);
+        let result1 = full_scan(&config, &mut manifests);
         assert_eq!(result1.created, 1);
 
-        let result2 = full_scan(&config, &mut manifest);
+        let result2 = full_scan(&config, &mut manifests);
         assert_eq!(result2.created, 0);
         assert_eq!(result2.already_existed, 1);
     }
@@ -255,13 +270,13 @@ mod tests {
         fs::write(repo.join("README.md"), "hello").unwrap();
 
         let config = make_config(&repo, &output);
-        let mut manifest = Manifest::load(&output).unwrap();
-        full_scan(&config, &mut manifest);
+        let mut manifests = make_manifests(&config);
+        full_scan(&config, &mut manifests);
 
         // Delete source file
         fs::remove_file(repo.join("README.md")).unwrap();
 
-        let result = full_scan(&config, &mut manifest);
+        let result = full_scan(&config, &mut manifests);
         assert_eq!(result.pruned, 1);
         assert!(!output.join("my-repo").join("README.md").exists());
     }
@@ -283,6 +298,7 @@ mod tests {
             },
             include: globset::GlobSetBuilder::new().build().unwrap(),
             include_patterns: vec![],
+            output_dir: output.clone(),
         };
 
         let mut manifest = Manifest::load(&output).unwrap();

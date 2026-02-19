@@ -44,6 +44,8 @@ log_level = "INFO"
 # [[repos]]
 # path = "~/code/my-project"
 # name = "my-project"           # optional, defaults to directory basename
+# output_dir = "~/work-docs"    # optional, overrides global output_dir
+#                                # mirror goes to ~/work-docs/my-project/
 # exclude = ["docs/generated/"] # merged with global_exclude
 # include = ["*.tex"]           # merged with global_include
 #

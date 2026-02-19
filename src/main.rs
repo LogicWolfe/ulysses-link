@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -111,6 +112,22 @@ fn setup_logging(log_level: &str) {
         .init();
 }
 
+fn load_manifests(cfg: &config::Config) -> HashMap<PathBuf, manifest::Manifest> {
+    let mut manifests = HashMap::new();
+    for output_dir in cfg.active_output_dirs() {
+        match manifest::Manifest::load(&output_dir) {
+            Ok(m) => {
+                manifests.insert(output_dir, m);
+            }
+            Err(e) => {
+                eprintln!("Failed to load manifest from {}: {e}", output_dir.display());
+                std::process::exit(1);
+            }
+        }
+    }
+    manifests
+}
+
 fn cmd_sync(path: Option<PathBuf>, output: Option<PathBuf>, config_arg: Option<PathBuf>) {
     if let Some(ref repo_path) = path {
         // Sync a specific directory: ensure config exists, add repo, scan
@@ -140,7 +157,7 @@ fn cmd_sync(path: Option<PathBuf>, output: Option<PathBuf>, config_arg: Option<P
             }
         }
 
-        let mut cfg = match config::load_config(Some(&config_path)) {
+        let cfg = match config::load_config(Some(&config_path)) {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("Error: {e}");
@@ -149,29 +166,8 @@ fn cmd_sync(path: Option<PathBuf>, output: Option<PathBuf>, config_arg: Option<P
         };
         setup_logging(&cfg.log_level);
 
-        // Override output_dir with the CLI-provided path
-        if let Some(ref output_dir) = output {
-            let expanded = std::fs::canonicalize(output_dir).unwrap_or_else(|_| output_dir.clone());
-            cfg.output_dir = expanded;
-        }
-
-        // Ensure output dir exists
-        if let Err(e) = std::fs::create_dir_all(&cfg.output_dir) {
-            eprintln!(
-                "Failed to create output directory {}: {e}",
-                cfg.output_dir.display()
-            );
-            std::process::exit(1);
-        }
-
-        let mut manifest = match manifest::Manifest::load(&cfg.output_dir) {
-            Ok(m) => m,
-            Err(e) => {
-                eprintln!("Failed to load manifest: {e}");
-                std::process::exit(1);
-            }
-        };
-        let result = scanner::full_scan(&cfg, &mut manifest);
+        let mut manifests = load_manifests(&cfg);
+        let result = scanner::full_scan(&cfg, &mut manifests);
         print_sync_summary(&result);
 
         notify_or_warn_service();
@@ -192,14 +188,8 @@ fn cmd_sync(path: Option<PathBuf>, output: Option<PathBuf>, config_arg: Option<P
         };
         setup_logging(&cfg.log_level);
 
-        let mut manifest = match manifest::Manifest::load(&cfg.output_dir) {
-            Ok(m) => m,
-            Err(e) => {
-                eprintln!("Failed to load manifest: {e}");
-                std::process::exit(1);
-            }
-        };
-        let result = scanner::full_scan(&cfg, &mut manifest);
+        let mut manifests = load_manifests(&cfg);
+        let result = scanner::full_scan(&cfg, &mut manifests);
         print_sync_summary(&result);
     }
 }
@@ -243,19 +233,17 @@ fn cmd_remove(repo_path: PathBuf, config_arg: Option<PathBuf>) {
         }
     };
 
-    // Find the matching repo to show its name
+    // Find the matching repo
     let canonical = std::fs::canonicalize(&repo_path).unwrap_or_else(|_| repo_path.clone());
-    let repo_name = cfg
-        .repos
-        .iter()
-        .find(|r| r.path == canonical)
-        .map(|r| r.name.clone());
+    let matched_repo = cfg.repos.iter().find(|r| r.path == canonical);
 
-    if repo_name.is_none() {
+    if matched_repo.is_none() {
         eprintln!("{} is not in the config", repo_path.display());
         std::process::exit(1);
     }
-    let repo_name = repo_name.unwrap();
+    let matched_repo = matched_repo.unwrap();
+    let repo_name = matched_repo.name.clone();
+    let repo_output_dir = matched_repo.output_dir.clone();
 
     // Confirm removal
     let confirm = dialoguer::Confirm::new()
@@ -283,7 +271,7 @@ fn cmd_remove(repo_path: PathBuf, config_arg: Option<PathBuf>) {
     }
 
     // Ask about removing linked files
-    let mirror_path = cfg.output_dir.join(&repo_name);
+    let mirror_path = repo_output_dir.join(&repo_name);
     if mirror_path.exists() {
         let remove_links = dialoguer::Confirm::new()
             .with_prompt(format!(
@@ -295,17 +283,18 @@ fn cmd_remove(repo_path: PathBuf, config_arg: Option<PathBuf>) {
             .unwrap_or(true);
 
         if remove_links {
-            let mut manifest = match manifest::Manifest::load(&cfg.output_dir) {
+            let mut manifest = match manifest::Manifest::load(&repo_output_dir) {
                 Ok(m) => m,
                 Err(e) => {
                     eprintln!("Failed to load manifest: {e}");
                     std::process::exit(1);
                 }
             };
-            if let Err(e) = linker::remove_repo_mirror(&repo_name, &cfg.output_dir, &mut manifest) {
+            if let Err(e) = linker::remove_repo_mirror(&repo_name, &repo_output_dir, &mut manifest)
+            {
                 eprintln!("Failed to remove mirrored files: {e}");
             } else {
-                if let Err(e) = manifest.save(&cfg.output_dir) {
+                if let Err(e) = manifest.save(&repo_output_dir) {
                     eprintln!("Failed to save manifest: {e}");
                 }
                 println!("Removed {}", mirror_path.display());

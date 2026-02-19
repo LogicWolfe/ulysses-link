@@ -1,8 +1,8 @@
 # ulysses-link
 
-Your code repos are full of useful documentation — READMEs, guides, changelogs, design docs — buried under `node_modules`, build artifacts, and thousands of source files. ulysses-link extracts just the docs and links them into a single clean directory that [Ulysses](https://ulysses.app) can import as an external folder.
+A background service that extracts documentation files from code repositories and links them into a directory structure that [Ulysses](https://ulysses.app) can import as an external folder.
 
-Edits in Ulysses flow through to the real files instantly via symlinks. No syncing, no copies.
+Files are linked via symlinks, so edits in Ulysses write directly to the original files.
 
 ## Getting started
 
@@ -12,40 +12,40 @@ Install the binary:
 cargo install ulysses-link
 ```
 
-Sync your first repo:
+Sync your first repo, specifying where the symlink tree should be rooted:
 
 ```sh
-ulysses-link sync ~/code/my-project
+ulysses-link sync ~/code/my-project ~/ulysses-link
 ```
 
-On the first run, ulysses-link will ask to create a config file. Hit enter to accept the defaults. It will scan the repo, find all the documentation files, and create symlinks in `~/ulysses-link/my-project/`.
+This creates a config file, scans the repo for documentation files, and creates symlinks under `~/ulysses-link/my-project/`.
 
 Add more repos the same way:
 
 ```sh
-ulysses-link sync ~/code/another-project
+ulysses-link sync ~/code/another-project ~/ulysses-link
 ```
 
-Now open Ulysses, go to **Library > Add External Folder**, and point it at `~/ulysses-link`. All your docs from all your repos appear in one place.
+Then open Ulysses, go to **Library > Add External Folder**, and point it at `~/ulysses-link`.
 
 ## Keep it synced
 
-The `sync` command does a one-time scan. To keep things synced as files change, install the background service:
+The `sync` command does a one-time scan. To watch for changes continuously, install the background service:
 
 ```sh
 ulysses-link install
 ```
 
-This installs a **launchd user agent** on macOS or a **systemd user unit** on Linux that starts on login and watches your repos for changes. Any new or deleted docs are reflected immediately.
+This installs a **launchd user agent** on macOS or a **systemd user unit** on Linux that starts on login and watches configured repos for changes.
 
-After installing the service, running `ulysses-link sync <path>` will add the repo and automatically notify the running service to pick it up.
+After installing the service, running `ulysses-link sync <path> <output>` will add the repo and notify the running service to pick it up.
 
 ## Managing repos
 
 ```sh
-ulysses-link sync <path>       # add a repo and sync it
-ulysses-link sync              # re-sync all configured repos
-ulysses-link remove <path>     # remove a repo (prompts for confirmation)
+ulysses-link sync <path> <output>  # add a repo and sync it
+ulysses-link sync                  # re-sync all configured repos
+ulysses-link remove <path>         # remove a repo (prompts for confirmation)
 ```
 
 ## Configuration
@@ -104,7 +104,11 @@ Exclude patterns use `.gitignore` syntax. Include patterns use glob syntax.
 
 By default, ulysses-link includes: `*.md`, `*.mdx`, `*.markdown`, `*.txt`, `*.rst`, `*.adoc`, `*.org`, `README`, `LICENSE`, `CHANGELOG`, `CONTRIBUTING`, `AUTHORS`, `COPYING`, and `TODO`.
 
-It automatically skips: `.git/`, `node_modules/`, `vendor/`, `.venv/`, `dist/`, `build/`, `target/`, `__pycache__/`, `.idea/`, `.vscode/`, `coverage/`, `.DS_Store`, and many other common non-doc directories. All patterns are configurable.
+It skips: `.git/`, `node_modules/`, `vendor/`, `.venv/`, `dist/`, `build/`, `target/`, `__pycache__/`, `.idea/`, `.vscode/`, `coverage/`, `.DS_Store`, and other common non-documentation directories. All patterns are configurable.
+
+## Non-destructive sync
+
+Sync will never overwrite real files in the output directory. If a regular file or directory exists where a symlink would be placed, it is skipped with a warning. Existing symlinks pointing to the wrong target are replaced.
 
 ## Service management
 
@@ -117,7 +121,7 @@ ulysses-link status                # check if the service is running
 ## CLI reference
 
 ```
-ulysses-link sync [path]           Sync a repo (or all repos if no path given)
+ulysses-link sync [path] [output]  Sync a repo (or all repos if no path given)
 ulysses-link remove <path>         Remove a repo from config
 ulysses-link config                Open config in your editor
 ulysses-link install               Install as background service

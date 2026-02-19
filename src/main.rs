@@ -53,6 +53,8 @@ enum Commands {
     Uninstall,
     /// Check service status
     Status,
+    /// Show service logs
+    Logs,
     /// Start watching repos in the foreground
     #[command(hide = true)]
     Run {
@@ -88,6 +90,7 @@ fn main() {
         Some(Commands::Install { config }) => cmd_install(config),
         Some(Commands::Uninstall) => cmd_uninstall(),
         Some(Commands::Status) => cmd_status(),
+        Some(Commands::Logs) => cmd_logs(),
     }
 }
 
@@ -345,7 +348,7 @@ fn cmd_run(config_arg: Option<PathBuf>) {
 
     let mut engine = engine::MirrorEngine::new(cfg);
     if let Err(e) = engine.start() {
-        eprintln!("Engine error: {e}");
+        tracing::error!("Engine error: {e}");
         std::process::exit(1);
     }
 }
@@ -392,6 +395,13 @@ fn cmd_uninstall() {
 fn cmd_status() {
     if let Err(e) = service::print_status() {
         eprintln!("Failed to get status: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn cmd_logs() {
+    if let Err(e) = service::print_logs() {
+        eprintln!("Failed to get logs: {e}");
         std::process::exit(1);
     }
 }

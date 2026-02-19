@@ -379,10 +379,30 @@ fn handle_raw_mirror_event(event: &Event, output_dir: &Path, pending: &Arc<Mutex
                     p.events.insert(rel_path, EventType::Modified);
                 }
             }
+            EventKind::Modify(notify::event::ModifyKind::Name(rename_mode)) => match rename_mode {
+                notify::event::RenameMode::From => {
+                    p.events.insert(rel_path, EventType::Deleted);
+                }
+                notify::event::RenameMode::To => {
+                    p.events.insert(rel_path, EventType::Modified);
+                }
+                notify::event::RenameMode::Both => {
+                    if path == &event.paths[0] {
+                        p.events.insert(rel_path, EventType::Deleted);
+                    } else {
+                        p.events.insert(rel_path, EventType::Modified);
+                    }
+                }
+                _ => {
+                    p.events.insert(rel_path, EventType::Modified);
+                }
+            },
+            EventKind::Create(_) if !path.is_dir() => {
+                p.events.insert(rel_path, EventType::Modified);
+            }
             EventKind::Remove(_) if !path.is_dir() => {
                 p.events.insert(rel_path, EventType::Deleted);
             }
-            // Ignore creates in mirror — not our file unless already in manifest
             _ => {}
         }
     }
@@ -648,5 +668,91 @@ mod tests {
 
         thread::sleep(Duration::from_millis(50));
         watcher.cancel();
+    }
+
+    #[test]
+    fn test_mirror_rename_to_produces_modified() {
+        let tmp = TempDir::new().unwrap();
+        let output = tmp.path();
+        let pending = Arc::new(Mutex::new(PendingEvents {
+            events: HashMap::new(),
+        }));
+
+        let event = Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Name(
+                notify::event::RenameMode::To,
+            )),
+            paths: vec![output.join("repo/doc.md")],
+            attrs: Default::default(),
+        };
+
+        handle_raw_mirror_event(&event, output, &pending);
+
+        let p = pending.lock().unwrap();
+        assert_eq!(p.events.get("repo/doc.md"), Some(&EventType::Modified));
+    }
+
+    #[test]
+    fn test_mirror_create_produces_modified() {
+        let tmp = TempDir::new().unwrap();
+        let output = tmp.path();
+        let pending = Arc::new(Mutex::new(PendingEvents {
+            events: HashMap::new(),
+        }));
+
+        let event = Event {
+            kind: EventKind::Create(notify::event::CreateKind::File),
+            paths: vec![output.join("repo/doc.md")],
+            attrs: Default::default(),
+        };
+
+        handle_raw_mirror_event(&event, output, &pending);
+
+        let p = pending.lock().unwrap();
+        assert_eq!(p.events.get("repo/doc.md"), Some(&EventType::Modified));
+    }
+
+    #[test]
+    fn test_mirror_rename_from_produces_deleted() {
+        let tmp = TempDir::new().unwrap();
+        let output = tmp.path();
+        let pending = Arc::new(Mutex::new(PendingEvents {
+            events: HashMap::new(),
+        }));
+
+        let event = Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Name(
+                notify::event::RenameMode::From,
+            )),
+            paths: vec![output.join("repo/doc.md")],
+            attrs: Default::default(),
+        };
+
+        handle_raw_mirror_event(&event, output, &pending);
+
+        let p = pending.lock().unwrap();
+        assert_eq!(p.events.get("repo/doc.md"), Some(&EventType::Deleted));
+    }
+
+    #[test]
+    fn test_mirror_ignores_ulysses_link_files() {
+        let tmp = TempDir::new().unwrap();
+        let output = tmp.path();
+        let pending = Arc::new(Mutex::new(PendingEvents {
+            events: HashMap::new(),
+        }));
+
+        let event = Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Content,
+            )),
+            paths: vec![output.join(".ulysses-link/manifest.toml")],
+            attrs: Default::default(),
+        };
+
+        handle_raw_mirror_event(&event, output, &pending);
+
+        let p = pending.lock().unwrap();
+        assert!(p.events.is_empty());
     }
 }

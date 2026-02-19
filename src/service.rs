@@ -75,6 +75,40 @@ pub fn uninstall_service() -> Result<()> {
     }
 }
 
+pub fn print_logs() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let log_file = log_dir().join("ulysses-link.stdout.log");
+        if log_file.exists() {
+            let content = std::fs::read_to_string(&log_file).context("Failed to read log file")?;
+            if content.is_empty() {
+                println!("Log file is empty: {}", log_file.display());
+            } else {
+                print!("{content}");
+            }
+        } else {
+            println!("No log file found at {}", log_file.display());
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let output = Command::new("journalctl")
+            .args(["--user", "-u", SYSTEMD_UNIT_NAME, "--no-pager"])
+            .output()
+            .context("Failed to run journalctl")?;
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        println!("Log viewing is not supported on this platform.");
+        Ok(())
+    }
+}
+
 pub fn print_status() -> Result<()> {
     #[cfg(target_os = "macos")]
     {
@@ -299,11 +333,26 @@ fn status_launchd() -> Result<()> {
         for line in stdout.lines() {
             if line.contains(LAUNCHD_LABEL) {
                 println!("Service is running: {}", line.trim());
-                return Ok(());
+                break;
+            }
+        }
+    } else {
+        println!("Service is not running.");
+    }
+
+    let log_file = log_dir().join("ulysses-link.stdout.log");
+    if log_file.exists() {
+        let content = std::fs::read_to_string(&log_file).unwrap_or_default();
+        let lines: Vec<&str> = content.lines().collect();
+        if !lines.is_empty() {
+            let start = lines.len().saturating_sub(10);
+            println!("\nRecent logs:");
+            for line in &lines[start..] {
+                println!("  {line}");
             }
         }
     }
-    println!("Service is not running.");
+
     Ok(())
 }
 
@@ -414,6 +463,20 @@ fn status_systemd() -> Result<()> {
             println!("{}", stderr);
         }
     }
+
+    let log_output = Command::new("journalctl")
+        .args(["--user", "-u", SYSTEMD_UNIT_NAME, "-n", "10", "--no-pager"])
+        .output();
+    if let Ok(log_output) = log_output {
+        let log_text = String::from_utf8_lossy(&log_output.stdout);
+        if !log_text.trim().is_empty() {
+            println!("\nRecent logs:");
+            for line in log_text.lines() {
+                println!("  {line}");
+            }
+        }
+    }
+
     Ok(())
 }
 

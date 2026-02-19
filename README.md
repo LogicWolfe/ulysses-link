@@ -127,6 +127,7 @@ path = "~/code/another-project"
 | `output_dir` | — | Required. Root of the mirror tree. |
 | `debounce_seconds` | `0.5` | Seconds to wait after a burst of filesystem events before syncing. Range: 0.0–30.0. |
 | `log_level` | `"INFO"` | One of `TRACE`, `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
+| `rescan_interval` | `"auto"` | How often to do a full rescan. `"auto"` scales with scan speed, `"never"` disables, or a number of seconds. |
 | `global_exclude` | *(see below)* | Exclude patterns applied to all repos. `.gitignore` syntax. |
 | `global_include` | *(see below)* | Include patterns applied to all repos. Glob syntax. |
 

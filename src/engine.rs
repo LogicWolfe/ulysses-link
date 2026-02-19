@@ -11,12 +11,13 @@ use crate::config::{load_config, Config, RepoConfig, RescanInterval};
 use crate::linker;
 use crate::manifest::Manifest;
 use crate::scanner::{full_scan, scan_repo};
-use crate::watcher::{self, MirrorWatcher, RepoWatcher};
+use crate::watcher::{self, ConfigWatcher, MirrorWatcher, RepoWatcher};
 
 pub struct MirrorEngine {
     config: Config,
     watchers: HashMap<String, RepoWatcher>,
     mirror_watcher: Option<MirrorWatcher>,
+    config_watcher: Option<ConfigWatcher>,
     manifest: Arc<Mutex<Manifest>>,
     running: Arc<AtomicBool>,
     last_scan_at: Instant,
@@ -29,6 +30,7 @@ impl MirrorEngine {
             config,
             watchers: HashMap::new(),
             mirror_watcher: None,
+            config_watcher: None,
             manifest: Arc::new(Mutex::new(Manifest::empty())),
             running: Arc::new(AtomicBool::new(false)),
             last_scan_at: Instant::now(),
@@ -70,6 +72,19 @@ impl MirrorEngine {
         // Start mirror watcher on output_dir
         self.start_mirror_watcher();
 
+        // Start config file watcher
+        if let Some(ref config_path) = self.config.config_path {
+            match watcher::create_config_watcher(config_path) {
+                Ok(w) => {
+                    debug!("Started config watcher on {}", config_path.display());
+                    self.config_watcher = Some(w);
+                }
+                Err(e) => {
+                    warn!("Failed to start config watcher: {}", e);
+                }
+            }
+        }
+
         self.running.store(true, Ordering::SeqCst);
 
         // Register signal handlers
@@ -105,6 +120,7 @@ impl MirrorEngine {
             mw.cancel();
         }
         self.mirror_watcher = None;
+        self.config_watcher = None;
 
         info!("Engine stopped");
     }
@@ -128,6 +144,42 @@ impl MirrorEngine {
                 return;
             }
         };
+
+        // Detect output_dir change — must reload manifest and restart mirror watcher
+        let output_dir_changed = self.config.output_dir != new_config.output_dir;
+        let mut output_dir_moved = false;
+        if output_dir_changed {
+            info!(
+                "output_dir changed: {} -> {}",
+                self.config.output_dir.display(),
+                new_config.output_dir.display(),
+            );
+
+            // Stop the mirror watcher on the old output_dir to prevent
+            // deletions there from propagating to source files
+            if let Some(ref mut mw) = self.mirror_watcher {
+                mw.cancel();
+            }
+            self.mirror_watcher = None;
+
+            // Try to move the old output_dir to the new location
+            match linker::move_output_dir(&self.config.output_dir, &new_config.output_dir) {
+                Ok(true) => output_dir_moved = true,
+                Ok(false) => {}
+                Err(e) => {
+                    warn!("Failed to move output_dir, will re-scan: {}", e);
+                }
+            }
+
+            // Load manifest from the new output_dir (either moved or fresh)
+            match Manifest::load(&new_config.output_dir) {
+                Ok(m) => self.manifest = Arc::new(Mutex::new(m)),
+                Err(e) => {
+                    error!("Failed to load manifest from new output_dir: {}", e);
+                    return;
+                }
+            }
+        }
 
         let old_names: HashSet<String> = self.config.repos.iter().map(|r| r.name.clone()).collect();
         let new_names: HashSet<String> = new_config.repos.iter().map(|r| r.name.clone()).collect();
@@ -179,7 +231,37 @@ impl MirrorEngine {
 
         self.config = new_config;
 
-        if repos_changed {
+        if output_dir_changed {
+            if output_dir_moved {
+                info!("Output directory moved successfully, running reconciliation scan");
+            } else {
+                info!("Re-scanning all repos into new output_dir");
+            }
+            let scan_start = Instant::now();
+            let result = {
+                let mut manifest = self.manifest.lock().unwrap();
+                full_scan(&self.config, &mut manifest)
+            };
+            self.last_scan_duration = scan_start.elapsed();
+            self.last_scan_at = Instant::now();
+            info!(
+                "Scan after output_dir change: {} created, {} existed, {} pruned in {:?}",
+                result.created, result.already_existed, result.pruned, self.last_scan_duration,
+            );
+
+            // Restart all repo watchers with new output_dir
+            let repo_names: Vec<String> = self.watchers.keys().cloned().collect();
+            for name in &repo_names {
+                self.stop_repo_watcher(name);
+            }
+            let repos: Vec<RepoConfig> = self.config.repos.clone();
+            for repo_config in &repos {
+                self.start_repo_watcher(repo_config);
+            }
+
+            // Start mirror watcher on new output_dir
+            self.start_mirror_watcher();
+        } else if repos_changed {
             self.last_scan_at = Instant::now();
         }
     }
@@ -268,6 +350,13 @@ impl MirrorEngine {
                         info!("Received SIGHUP, reloading config");
                         self.reload_config();
                     }
+                }
+            }
+
+            if let Some(ref cw) = self.config_watcher {
+                if cw.has_changed() {
+                    info!("Config file changed, reloading");
+                    self.reload_config();
                 }
             }
 

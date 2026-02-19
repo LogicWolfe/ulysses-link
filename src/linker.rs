@@ -2,12 +2,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 use walkdir::WalkDir;
 
 use crate::manifest::{hash_bytes, hash_file, Manifest, ManifestEntry};
 
 const BASE_CACHE_DIR: &str = ".ulysses-link.d";
+const MANIFEST_FILENAME: &str = ".ulysses-link";
 
 #[derive(Debug, PartialEq)]
 pub enum SyncOutcome {
@@ -430,6 +431,58 @@ pub fn save_conflict(path: &Path, content: &str) -> Result<PathBuf> {
         .with_context(|| format!("Failed to write conflict file {}", conflict_path.display()))?;
     debug!("Saved conflict file: {}", conflict_path.display());
     Ok(conflict_path)
+}
+
+/// Attempt to move the output directory from old to new via rename.
+/// Returns `true` if the move succeeded, `false` if the caller should fall back to re-scan.
+pub fn move_output_dir(old: &Path, new: &Path) -> Result<bool> {
+    // Old dir must exist and contain our manifest
+    if !old.is_dir() || !old.join(MANIFEST_FILENAME).exists() {
+        return Ok(false);
+    }
+
+    // New dir must not exist or be empty
+    if new.exists() && !is_dir_empty(new) {
+        return Ok(false);
+    }
+
+    // Create parent directories for the new path
+    if let Some(parent) = new.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create parent dirs for {}", new.display()))?;
+    }
+
+    // Remove the new dir if it exists (empty) so rename can succeed
+    if new.exists() {
+        fs::remove_dir(new)
+            .with_context(|| format!("Failed to remove empty dir {}", new.display()))?;
+    }
+
+    match fs::rename(old, new) {
+        Ok(()) => {
+            info!(
+                "Moved output directory: {} -> {}",
+                old.display(),
+                new.display()
+            );
+            Ok(true)
+        }
+        Err(e) => {
+            // Cross-device rename fails — fall back to re-scan
+            if e.raw_os_error() == Some(libc::EXDEV) {
+                warn!(
+                    "Cannot move output_dir across filesystems ({} -> {}), will re-scan",
+                    old.display(),
+                    new.display()
+                );
+                Ok(false)
+            } else {
+                Err(e).with_context(|| {
+                    format!("Failed to rename {} -> {}", old.display(), new.display())
+                })
+            }
+        }
+    }
 }
 
 // --- Base cache helpers ---
@@ -983,6 +1036,86 @@ mod tests {
             .join("nested")
             .exists());
         assert!(!output.path().join("my-repo").join("deep").exists());
+    }
+
+    #[test]
+    fn test_move_output_dir_success() {
+        let tmp = TempDir::new().unwrap();
+        let old = tmp.path().join("old-output");
+        let new = tmp.path().join("new-output");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join(MANIFEST_FILENAME), "manifest data").unwrap();
+        fs::create_dir_all(old.join("repo").join("sub")).unwrap();
+        fs::write(old.join("repo").join("sub").join("doc.md"), "content").unwrap();
+
+        let moved = move_output_dir(&old, &new).unwrap();
+        assert!(moved);
+        assert!(!old.exists());
+        assert!(new.join(MANIFEST_FILENAME).exists());
+        assert_eq!(
+            fs::read_to_string(new.join("repo").join("sub").join("doc.md")).unwrap(),
+            "content"
+        );
+    }
+
+    #[test]
+    fn test_move_output_dir_no_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let old = tmp.path().join("old-output");
+        let new = tmp.path().join("new-output");
+        fs::create_dir_all(&old).unwrap();
+        // No manifest file — should fall back
+
+        let moved = move_output_dir(&old, &new).unwrap();
+        assert!(!moved);
+        assert!(old.exists());
+    }
+
+    #[test]
+    fn test_move_output_dir_new_has_content() {
+        let tmp = TempDir::new().unwrap();
+        let old = tmp.path().join("old-output");
+        let new = tmp.path().join("new-output");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join(MANIFEST_FILENAME), "manifest data").unwrap();
+        fs::create_dir_all(&new).unwrap();
+        fs::write(new.join("existing.txt"), "something").unwrap();
+
+        let moved = move_output_dir(&old, &new).unwrap();
+        assert!(!moved);
+        // Both dirs still exist
+        assert!(old.exists());
+        assert!(new.join("existing.txt").exists());
+    }
+
+    #[test]
+    fn test_move_output_dir_new_is_empty() {
+        let tmp = TempDir::new().unwrap();
+        let old = tmp.path().join("old-output");
+        let new = tmp.path().join("new-output");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join(MANIFEST_FILENAME), "manifest data").unwrap();
+        fs::create_dir_all(&new).unwrap();
+        // new exists but is empty — should succeed
+
+        let moved = move_output_dir(&old, &new).unwrap();
+        assert!(moved);
+        assert!(!old.exists());
+        assert!(new.join(MANIFEST_FILENAME).exists());
+    }
+
+    #[test]
+    fn test_move_output_dir_creates_parents() {
+        let tmp = TempDir::new().unwrap();
+        let old = tmp.path().join("old-output");
+        let new = tmp.path().join("deeply").join("nested").join("new-output");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join(MANIFEST_FILENAME), "manifest data").unwrap();
+
+        let moved = move_output_dir(&old, &new).unwrap();
+        assert!(moved);
+        assert!(!old.exists());
+        assert!(new.join(MANIFEST_FILENAME).exists());
     }
 
     #[test]

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -77,6 +79,60 @@ impl Drop for MirrorWatcher {
         let mut stop = self.stop.lock().unwrap();
         *stop = true;
     }
+}
+
+pub struct ConfigWatcher {
+    _watcher: RecommendedWatcher,
+    changed: Arc<AtomicBool>,
+}
+
+impl ConfigWatcher {
+    /// Atomically check and clear the changed flag.
+    pub fn has_changed(&self) -> bool {
+        self.changed.swap(false, Ordering::SeqCst)
+    }
+}
+
+/// Watch the config file for changes. Watches the parent directory (non-recursive)
+/// so editors that delete+recreate the file still trigger events.
+pub fn create_config_watcher(config_path: &Path) -> Result<ConfigWatcher> {
+    let parent = config_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Config path has no parent directory"))?;
+    let config_filename = config_path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("Config path has no filename"))?
+        .to_os_string();
+
+    let changed = Arc::new(AtomicBool::new(false));
+    let changed_clone = Arc::clone(&changed);
+
+    let watcher = RecommendedWatcher::new(
+        move |result: Result<Event, notify::Error>| match result {
+            Ok(event) => {
+                let dominated = matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_));
+                if dominated {
+                    let matches_config = event.paths.iter().any(|p| {
+                        p.file_name().map(OsStr::to_os_string).as_ref() == Some(&config_filename)
+                    });
+                    if matches_config {
+                        changed_clone.store(true, Ordering::SeqCst);
+                    }
+                }
+            }
+            Err(e) => error!("Config watch error: {}", e),
+        },
+        NotifyConfig::default(),
+    )?;
+
+    // Watch parent directory non-recursively
+    let mut watcher = watcher;
+    watcher.watch(parent, RecursiveMode::NonRecursive)?;
+
+    Ok(ConfigWatcher {
+        _watcher: watcher,
+        changed,
+    })
 }
 
 /// Create a watcher for a single source repo with debounced event handling.
@@ -560,6 +616,25 @@ mod tests {
 
         thread::sleep(Duration::from_millis(50));
         watcher.cancel();
+    }
+
+    #[test]
+    fn test_config_watcher_creates_and_detects_change() {
+        let tmp = TempDir::new().unwrap();
+        let config_file = tmp.path().join("config.toml");
+        fs::write(&config_file, "version = 1").unwrap();
+
+        let watcher = create_config_watcher(&config_file).unwrap();
+        assert!(!watcher.has_changed());
+
+        // Modify the config file
+        thread::sleep(Duration::from_millis(100));
+        fs::write(&config_file, "version = 1\nlog_level = \"DEBUG\"").unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        assert!(watcher.has_changed());
+        // Second call should return false (flag was cleared)
+        assert!(!watcher.has_changed());
     }
 
     #[test]

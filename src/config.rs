@@ -359,6 +359,15 @@ fn parse_config(raw: RawConfig, config_path: Option<PathBuf>) -> Result<Config, 
             )));
         }
 
+        // Check repo not inside output_dir
+        if path.starts_with(&output_dir) {
+            return Err(ConfigError::Validation(format!(
+                "repo '{}' is inside output_dir '{}'. The mirror watcher would see source changes as mirror edits, risking data loss.",
+                path.display(),
+                output_dir.display(),
+            )));
+        }
+
         let repo_exclude: Vec<String> = repo_raw.exclude.clone().unwrap_or_default();
         let repo_include: Vec<String> = repo_raw.include.clone().unwrap_or_default();
 
@@ -822,6 +831,26 @@ mod tests {
 
         let err = load_config(Some(&config_path)).unwrap_err();
         assert!(err.to_string().contains("infinite loop"));
+    }
+
+    #[test]
+    fn test_repo_inside_output_dir() {
+        let tmp = TempDir::new().unwrap();
+        let output_dir = tmp.path().join("output");
+        let repo_dir = output_dir.join("my-repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        let config_path = write_config(
+            tmp.path(),
+            &format!(
+                "version = 1\noutput_dir = \"{}\"\n\n[[repos]]\npath = \"{}\"",
+                output_dir.display(),
+                repo_dir.display()
+            ),
+        );
+
+        let err = load_config(Some(&config_path)).unwrap_err();
+        assert!(err.to_string().contains("inside output_dir"));
     }
 
     #[test]

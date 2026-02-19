@@ -5,7 +5,7 @@ edition = "2021"
 description = "Background service that extracts documentation files from code repositories and links them for Ulysses external folder importing"
 license = "MIT"
 repository = "https://github.com/LogicWolfe/ulysses-link"
-keywords = ["markdown", "symlink", "ulysses", "documentation"]
+keywords = ["markdown", "mirror", "ulysses", "documentation"]
 categories = ["command-line-utilities", "filesystem"]
 
 [[bin]]
@@ -14,14 +14,17 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 ctrlc = { version = "3", features = ["termination"] }
 dialoguer = "0.11"
+diffy = "0.4"
 dirs = "6"
 globset = "0.4"
 ignore = "0.4"
 notify = "7"
 serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
 toml = "0.8"
 toml_edit = "0.22"
 shellexpand = "3"

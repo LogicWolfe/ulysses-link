@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use ulysses_link::{config, engine, linker, scanner, service};
+use ulysses_link::{config, engine, linker, manifest, scanner, service};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -23,7 +23,7 @@ enum Commands {
         /// Directory to add and sync. Omit to sync all configured repos.
         path: Option<PathBuf>,
 
-        /// Output directory for the symlink mirror tree.
+        /// Output directory for the mirror tree.
         /// Required when no config file exists.
         output: Option<PathBuf>,
 
@@ -164,7 +164,14 @@ fn cmd_sync(path: Option<PathBuf>, output: Option<PathBuf>, config_arg: Option<P
             std::process::exit(1);
         }
 
-        let result = scanner::full_scan(&cfg);
+        let mut manifest = match manifest::Manifest::load(&cfg.output_dir) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("Failed to load manifest: {e}");
+                std::process::exit(1);
+            }
+        };
+        let result = scanner::full_scan(&cfg, &mut manifest);
         print_sync_summary(&result);
 
         notify_or_warn_service();
@@ -185,16 +192,37 @@ fn cmd_sync(path: Option<PathBuf>, output: Option<PathBuf>, config_arg: Option<P
         };
         setup_logging(&cfg.log_level);
 
-        let result = scanner::full_scan(&cfg);
+        let mut manifest = match manifest::Manifest::load(&cfg.output_dir) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("Failed to load manifest: {e}");
+                std::process::exit(1);
+            }
+        };
+        let result = scanner::full_scan(&cfg, &mut manifest);
         print_sync_summary(&result);
     }
 }
 
 fn print_sync_summary(result: &scanner::ScanResult) {
-    println!(
-        "Sync complete: {} created, {} existed, {} skipped, {} pruned, {} errors",
-        result.created, result.already_existed, result.skipped, result.pruned, result.errors,
-    );
+    let mut parts = vec![
+        format!("{} created", result.created),
+        format!("{} existed", result.already_existed),
+    ];
+    if result.skipped > 0 {
+        parts.push(format!("{} skipped", result.skipped));
+    }
+    if result.merged > 0 {
+        parts.push(format!("{} merged", result.merged));
+    }
+    if result.conflicts > 0 {
+        parts.push(format!("{} conflicts", result.conflicts));
+    }
+    parts.push(format!("{} pruned", result.pruned));
+    if result.errors > 0 {
+        parts.push(format!("{} errors", result.errors));
+    }
+    println!("Sync complete: {}", parts.join(", "));
 }
 
 fn cmd_remove(repo_path: PathBuf, config_arg: Option<PathBuf>) {
@@ -267,9 +295,19 @@ fn cmd_remove(repo_path: PathBuf, config_arg: Option<PathBuf>) {
             .unwrap_or(true);
 
         if remove_links {
-            if let Err(e) = linker::remove_repo_mirror(&repo_name, &cfg.output_dir) {
-                eprintln!("Failed to remove linked files: {e}");
+            let mut manifest = match manifest::Manifest::load(&cfg.output_dir) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("Failed to load manifest: {e}");
+                    std::process::exit(1);
+                }
+            };
+            if let Err(e) = linker::remove_repo_mirror(&repo_name, &cfg.output_dir, &mut manifest) {
+                eprintln!("Failed to remove mirrored files: {e}");
             } else {
+                if let Err(e) = manifest.save(&cfg.output_dir) {
+                    eprintln!("Failed to save manifest: {e}");
+                }
                 println!("Removed {}", mirror_path.display());
             }
         }

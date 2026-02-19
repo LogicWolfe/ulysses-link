@@ -1,6 +1,7 @@
 pub mod config;
 pub mod engine;
 pub mod linker;
+pub mod manifest;
 pub mod matcher;
 pub mod scanner;
 pub mod service;

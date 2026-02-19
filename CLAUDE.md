@@ -4,7 +4,7 @@ This file provides guidance to AI coding assistants when working with code in th
 
 ## Repository Structure
 
-This repository contains **ulysses-link**, a lightweight background service that extracts documentation files from code repositories and links them for Ulysses external folder importing. Written in Rust — install with `cargo install ulysses-link`.
+This repository contains **ulysses-link**, a lightweight background service that extracts documentation files from code repositories and copies them into a mirror tree for Ulysses external folder importing. Edits in Ulysses are synced back to the source repos via bidirectional three-way sync with manifest-based ownership tracking. Written in Rust — install with `cargo install ulysses-link`.
 
 ```
 ulysses-link/
@@ -15,9 +15,10 @@ ulysses-link/
 │   ├── lib.rs           # Library root, public module declarations
 │   ├── config.rs        # TOML loading, validation, defaults
 │   ├── matcher.rs       # Include/exclude filtering (ignore + globset)
-│   ├── linker.rs        # Symlink creation/removal/pruning
+│   ├── manifest.rs      # TOML manifest for file ownership + SHA-256 hashing
+│   ├── linker.rs        # File copy, three-way sync, conflict resolution
 │   ├── scanner.rs       # Full tree scan + reconciliation
-│   ├── watcher.rs       # notify integration + debouncing
+│   ├── watcher.rs       # Bidirectional notify integration + debouncing
 │   ├── engine.rs        # Core orchestrator (scan + watch lifecycle)
 │   └── service.rs       # OS service install/uninstall/status
 └── tests/
@@ -45,7 +46,7 @@ When a component expects a value to be provided:
 - Keep code minimal, readable, and maintainable
 - Focus on correctness over premature optimization
 - Sync with std threads, not async/tokio — this is a simple service
-- Key crates: `notify`, `ignore`, `globset`, `toml`, `clap`, `tracing`, `anyhow`/`thiserror`
+- Key crates: `notify`, `ignore`, `globset`, `toml`, `clap`, `tracing`, `anyhow`/`thiserror`, `sha2`, `diffy`, `chrono`
 
 ### Server Interaction Constraints
 

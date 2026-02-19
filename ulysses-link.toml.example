@@ -1,7 +1,8 @@
 # ulysses-link configuration
 version = 1
 
-# Where the symlink mirror tree is rooted.
+# Where the mirror tree is rooted.
+# Files are copied here and kept in bidirectional sync with source repos.
 # Tilde and env vars are expanded.
 output_dir = "~/ulysses-link"
 

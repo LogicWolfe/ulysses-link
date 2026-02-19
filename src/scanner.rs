@@ -4,7 +4,8 @@ use tracing::{info, warn};
 use walkdir::WalkDir;
 
 use crate::config::{Config, RepoConfig};
-use crate::linker::{self, LinkOutcome};
+use crate::linker::{self, SyncOutcome};
+use crate::manifest::Manifest;
 use crate::matcher;
 
 #[derive(Debug, Default)]
@@ -13,6 +14,8 @@ pub struct ScanResult {
     pub already_existed: u32,
     pub skipped: u32,
     pub pruned: u32,
+    pub merged: u32,
+    pub conflicts: u32,
     pub errors: u32,
 }
 
@@ -22,24 +25,30 @@ impl ScanResult {
         self.already_existed += other.already_existed;
         self.skipped += other.skipped;
         self.pruned += other.pruned;
+        self.merged += other.merged;
+        self.conflicts += other.conflicts;
         self.errors += other.errors;
     }
 }
 
-/// Scan all repos and reconcile the symlink mirror.
-pub fn full_scan(config: &Config) -> ScanResult {
+/// Scan all repos and reconcile the mirror tree.
+pub fn full_scan(config: &Config, manifest: &mut Manifest) -> ScanResult {
     let mut result = ScanResult::default();
 
     for repo_config in &config.repos {
-        let repo_result = scan_repo(repo_config, &config.output_dir);
+        let repo_result = scan_repo(repo_config, &config.output_dir, manifest);
         result.merge(&repo_result);
     }
 
     result
 }
 
-/// Scan a single repo and reconcile its symlink mirror.
-pub fn scan_repo(repo_config: &RepoConfig, output_dir: &Path) -> ScanResult {
+/// Scan a single repo and reconcile its mirror.
+pub fn scan_repo(
+    repo_config: &RepoConfig,
+    output_dir: &Path,
+    manifest: &mut Manifest,
+) -> ScanResult {
     let mut result = ScanResult::default();
     let repo_path = &repo_config.path;
 
@@ -55,7 +64,6 @@ pub fn scan_repo(repo_config: &RepoConfig, output_dir: &Path) -> ScanResult {
         .follow_links(false)
         .into_iter()
         .filter_entry(|entry| {
-            // Allow the root directory itself
             if entry.path() == repo_path {
                 return true;
             }
@@ -66,7 +74,7 @@ pub fn scan_repo(repo_config: &RepoConfig, output_dir: &Path) -> ScanResult {
             if entry.file_type().is_dir() {
                 matcher::should_descend(&rel_str, &repo_config.exclude)
             } else {
-                true // filter files in the body of the loop
+                true
             }
         });
 
@@ -89,23 +97,29 @@ pub fn scan_repo(repo_config: &RepoConfig, output_dir: &Path) -> ScanResult {
             continue;
         }
 
-        match linker::ensure_symlink(repo_path, &repo_config.name, &rel_path, output_dir) {
-            Ok(LinkOutcome::Created) => result.created += 1,
-            Ok(LinkOutcome::AlreadyCorrect) => result.already_existed += 1,
-            Ok(LinkOutcome::Skipped) => result.skipped += 1,
+        let source = repo_path.join(&rel_path);
+        let manifest_rel = format!("{}/{}", repo_config.name, rel_path);
+        let mirror = output_dir.join(&manifest_rel);
+
+        match linker::sync_file(&source, &mirror, manifest, &manifest_rel, output_dir) {
+            Ok(SyncOutcome::Copied) => result.created += 1,
+            Ok(SyncOutcome::AlreadyInSync | SyncOutcome::Claimed) => result.already_existed += 1,
+            Ok(SyncOutcome::Skipped) => result.skipped += 1,
+            Ok(SyncOutcome::Merged) => result.merged += 1,
+            Ok(SyncOutcome::Conflict) => result.conflicts += 1,
             Err(e) => {
-                tracing::error!("Failed to create symlink for {}: {}", rel_path, e);
+                tracing::error!("Failed to sync {}: {}", rel_path, e);
                 result.errors += 1;
             }
         }
     }
 
-    // Prune stale symlinks
-    match linker::prune_stale(&repo_config.name, output_dir) {
+    // Prune stale entries using manifest
+    match linker::prune_stale(&repo_config.name, output_dir, manifest) {
         Ok(pruned) => result.pruned = pruned,
         Err(e) => {
             tracing::error!(
-                "Failed to prune stale symlinks for {}: {}",
+                "Failed to prune stale entries for {}: {}",
                 repo_config.name,
                 e
             );
@@ -113,12 +127,19 @@ pub fn scan_repo(repo_config: &RepoConfig, output_dir: &Path) -> ScanResult {
         }
     }
 
+    if let Err(e) = manifest.save(output_dir) {
+        tracing::error!("Failed to save manifest: {}", e);
+        result.errors += 1;
+    }
+
     info!(
-        "Scan complete for {}: {} created, {} existed, {} skipped, {} pruned, {} errors",
+        "Scan complete for {}: {} created, {} existed, {} skipped, {} merged, {} conflicts, {} pruned, {} errors",
         repo_config.name,
         result.created,
         result.already_existed,
         result.skipped,
+        result.merged,
+        result.conflicts,
         result.pruned,
         result.errors,
     );
@@ -145,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn test_full_scan_creates_symlinks() {
+    fn test_full_scan_creates_copies() {
         let tmp = TempDir::new().unwrap();
         let repo = tmp.path().join("my-repo");
         let output = tmp.path().join("output");
@@ -157,17 +178,28 @@ mod tests {
         fs::write(repo.join("main.rs"), "fn main() {}").unwrap();
 
         let config = make_config(&repo, &output);
-        let result = full_scan(&config);
+        let mut manifest = Manifest::load(&output).unwrap();
+        let result = full_scan(&config, &mut manifest);
 
         assert_eq!(result.created, 2);
         assert_eq!(result.errors, 0);
-        assert!(output.join("my-repo").join("README.md").is_symlink());
-        assert!(output
-            .join("my-repo")
-            .join("docs")
-            .join("guide.md")
-            .is_symlink());
+
+        // Should be regular files, not symlinks
+        let readme = output.join("my-repo").join("README.md");
+        assert!(readme.exists());
+        assert!(!readme.is_symlink());
+        assert_eq!(fs::read_to_string(&readme).unwrap(), "hello");
+
+        let guide = output.join("my-repo").join("docs").join("guide.md");
+        assert!(guide.exists());
+        assert!(!guide.is_symlink());
+
+        // Non-matching files should not be in mirror
         assert!(!output.join("my-repo").join("main.rs").exists());
+
+        // Manifest should track the files
+        assert!(manifest.get("my-repo/README.md").is_some());
+        assert!(manifest.get("my-repo/docs/guide.md").is_some());
     }
 
     #[test]
@@ -187,10 +219,11 @@ mod tests {
         fs::write(repo.join("README.md"), "root").unwrap();
 
         let config = make_config(&repo, &output);
-        let result = full_scan(&config);
+        let mut manifest = Manifest::load(&output).unwrap();
+        let result = full_scan(&config, &mut manifest);
 
         assert_eq!(result.created, 1);
-        assert!(output.join("my-repo").join("README.md").is_symlink());
+        assert!(output.join("my-repo").join("README.md").exists());
         assert!(!output.join("my-repo").join("node_modules").exists());
     }
 
@@ -203,11 +236,12 @@ mod tests {
         fs::write(repo.join("README.md"), "hello").unwrap();
 
         let config = make_config(&repo, &output);
+        let mut manifest = Manifest::load(&output).unwrap();
 
-        let result1 = full_scan(&config);
+        let result1 = full_scan(&config, &mut manifest);
         assert_eq!(result1.created, 1);
 
-        let result2 = full_scan(&config);
+        let result2 = full_scan(&config, &mut manifest);
         assert_eq!(result2.created, 0);
         assert_eq!(result2.already_existed, 1);
     }
@@ -221,12 +255,13 @@ mod tests {
         fs::write(repo.join("README.md"), "hello").unwrap();
 
         let config = make_config(&repo, &output);
-        full_scan(&config);
+        let mut manifest = Manifest::load(&output).unwrap();
+        full_scan(&config, &mut manifest);
 
         // Delete source file
         fs::remove_file(repo.join("README.md")).unwrap();
 
-        let result = full_scan(&config);
+        let result = full_scan(&config, &mut manifest);
         assert_eq!(result.pruned, 1);
         assert!(!output.join("my-repo").join("README.md").exists());
     }
@@ -237,8 +272,6 @@ mod tests {
         let output = tmp.path().join("output");
         fs::create_dir(&output).unwrap();
 
-        // Config with a repo that doesn't exist won't have any repos after validation
-        // So we test scan_repo directly with a path that was deleted after config load
         let repo = tmp.path().join("deleted-repo");
 
         let repo_config = RepoConfig {
@@ -252,7 +285,8 @@ mod tests {
             include_patterns: vec![],
         };
 
-        let result = scan_repo(&repo_config, &output);
+        let mut manifest = Manifest::load(&output).unwrap();
+        let result = scan_repo(&repo_config, &output, &mut manifest);
         assert_eq!(result.created, 0);
         assert_eq!(result.errors, 0);
     }

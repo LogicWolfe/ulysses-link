@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -9,12 +9,15 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::{load_config, Config, RepoConfig, RescanInterval};
 use crate::linker;
+use crate::manifest::Manifest;
 use crate::scanner::{full_scan, scan_repo};
-use crate::watcher::{self, RepoWatcher};
+use crate::watcher::{self, MirrorWatcher, RepoWatcher};
 
 pub struct MirrorEngine {
     config: Config,
     watchers: HashMap<String, RepoWatcher>,
+    mirror_watcher: Option<MirrorWatcher>,
+    manifest: Arc<Mutex<Manifest>>,
     running: Arc<AtomicBool>,
     last_scan_at: Instant,
     last_scan_duration: Duration,
@@ -25,18 +28,28 @@ impl MirrorEngine {
         Self {
             config,
             watchers: HashMap::new(),
+            mirror_watcher: None,
+            manifest: Arc::new(Mutex::new(Manifest::empty())),
             running: Arc::new(AtomicBool::new(false)),
             last_scan_at: Instant::now(),
             last_scan_duration: Duration::ZERO,
         }
     }
 
-    /// Start the engine: full scan, start watchers, register signals, enter main loop.
+    /// Start the engine: load manifest, full scan, start watchers, enter main loop.
     pub fn start(&mut self) -> Result<()> {
         info!("Starting ulysses-link engine");
 
+        // Load manifest
+        let loaded_manifest = Manifest::load(&self.config.output_dir)?;
+        self.manifest = Arc::new(Mutex::new(loaded_manifest));
+
+        // Initial full scan
         let scan_start = Instant::now();
-        let result = full_scan(&self.config);
+        let result = {
+            let mut manifest = self.manifest.lock().unwrap();
+            full_scan(&self.config, &mut manifest)
+        };
         self.last_scan_duration = scan_start.elapsed();
         self.last_scan_at = Instant::now();
         info!(
@@ -48,11 +61,14 @@ impl MirrorEngine {
             self.last_scan_duration,
         );
 
-        // Clone repos to avoid borrow conflict
+        // Start per-repo source watchers
         let repos: Vec<RepoConfig> = self.config.repos.clone();
         for repo_config in &repos {
             self.start_repo_watcher(repo_config);
         }
+
+        // Start mirror watcher on output_dir
+        self.start_mirror_watcher();
 
         self.running.store(true, Ordering::SeqCst);
 
@@ -83,6 +99,13 @@ impl MirrorEngine {
             watcher.cancel();
         }
         self.watchers.clear();
+
+        if let Some(ref mut mw) = self.mirror_watcher {
+            debug!("Stopping mirror watcher");
+            mw.cancel();
+        }
+        self.mirror_watcher = None;
+
         info!("Engine stopped");
     }
 
@@ -109,7 +132,6 @@ impl MirrorEngine {
         let old_names: HashSet<String> = self.config.repos.iter().map(|r| r.name.clone()).collect();
         let new_names: HashSet<String> = new_config.repos.iter().map(|r| r.name.clone()).collect();
 
-        // Clone the data we need to avoid borrow issues
         let new_repos: Vec<RepoConfig> = new_config.repos.clone();
         let new_repos_by_name: HashMap<String, RepoConfig> =
             new_repos.into_iter().map(|r| (r.name.clone(), r)).collect();
@@ -122,7 +144,8 @@ impl MirrorEngine {
         for name in old_names.difference(&new_names) {
             info!("Repo removed from config: {}", name);
             self.stop_repo_watcher(name);
-            let _ = linker::remove_repo_mirror(name, &self.config.output_dir);
+            let mut manifest = self.manifest.lock().unwrap();
+            let _ = linker::remove_repo_mirror(name, &self.config.output_dir, &mut manifest);
         }
 
         // Added repos
@@ -130,7 +153,9 @@ impl MirrorEngine {
         for name in new_names.difference(&old_names) {
             info!("New repo in config: {}", name);
             if let Some(repo_config) = new_repos_by_name.get(name) {
-                scan_repo(repo_config, &new_config.output_dir);
+                let mut manifest = self.manifest.lock().unwrap();
+                scan_repo(repo_config, &new_config.output_dir, &mut manifest);
+                drop(manifest);
                 self.start_repo_watcher(repo_config);
                 repos_changed = true;
             }
@@ -144,7 +169,9 @@ impl MirrorEngine {
             if old_rc.include_patterns != new_rc.include_patterns || old_rc.path != new_rc.path {
                 info!("Repo config changed, re-scanning: {}", name);
                 self.stop_repo_watcher(name);
-                scan_repo(new_rc, &new_config.output_dir);
+                let mut manifest = self.manifest.lock().unwrap();
+                scan_repo(new_rc, &new_config.output_dir, &mut manifest);
+                drop(manifest);
                 self.start_repo_watcher(new_rc);
                 repos_changed = true;
             }
@@ -152,7 +179,6 @@ impl MirrorEngine {
 
         self.config = new_config;
 
-        // Reset rescan timer when repos were scanned during reload
         if repos_changed {
             self.last_scan_at = Instant::now();
         }
@@ -163,6 +189,7 @@ impl MirrorEngine {
             repo_config,
             &self.config.output_dir,
             self.config.debounce_seconds,
+            Arc::clone(&self.manifest),
         ) {
             Ok(w) => {
                 debug!("Started watcher for {}", repo_config.name);
@@ -180,6 +207,29 @@ impl MirrorEngine {
                 } else {
                     error!("Failed to start watcher for {}: {}", repo_config.name, e);
                 }
+            }
+        }
+    }
+
+    fn start_mirror_watcher(&mut self) {
+        match watcher::create_mirror_watcher(
+            &self.config.output_dir,
+            self.config.debounce_seconds,
+            Arc::clone(&self.manifest),
+        ) {
+            Ok(w) => {
+                debug!(
+                    "Started mirror watcher on {}",
+                    self.config.output_dir.display()
+                );
+                self.mirror_watcher = Some(w);
+            }
+            Err(e) => {
+                error!(
+                    "Failed to start mirror watcher on {}: {}",
+                    self.config.output_dir.display(),
+                    e
+                );
             }
         }
     }
@@ -225,7 +275,10 @@ impl MirrorEngine {
                 if self.last_scan_at.elapsed() >= interval {
                     info!("Periodic rescan");
                     let scan_start = Instant::now();
-                    let result = full_scan(&self.config);
+                    let result = {
+                        let mut manifest = self.manifest.lock().unwrap();
+                        full_scan(&self.config, &mut manifest)
+                    };
                     self.last_scan_duration = scan_start.elapsed();
                     self.last_scan_at = Instant::now();
                     info!(

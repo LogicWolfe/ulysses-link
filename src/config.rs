@@ -316,6 +316,20 @@ fn parse_config(raw: RawConfig, config_path: Option<PathBuf>) -> Result<Config, 
         global_include
     };
 
+    // Output dir safety: reject home directory, filesystem root, and repo paths
+    if let Some(home) = dirs::home_dir() {
+        if output_dir == home {
+            return Err(ConfigError::Validation(
+                "output_dir cannot be the home directory".into(),
+            ));
+        }
+    }
+    if output_dir == Path::new("/") {
+        return Err(ConfigError::Validation(
+            "output_dir cannot be the filesystem root".into(),
+        ));
+    }
+
     // Repos
     let repos_raw = raw.repos.unwrap_or_default();
     let named_repos = resolve_repo_names(&repos_raw)?;
@@ -325,6 +339,15 @@ fn parse_config(raw: RawConfig, config_path: Option<PathBuf>) -> Result<Config, 
         if !path.is_dir() {
             warn!("Repo path does not exist, skipping: {}", path.display());
             continue;
+        }
+
+        // Check output_dir is not the repo itself
+        if output_dir == path {
+            return Err(ConfigError::Validation(format!(
+                "output_dir '{}' is the same as repo '{}'. This would overwrite source files.",
+                output_dir.display(),
+                path.display(),
+            )));
         }
 
         // Check output_dir not inside repo
@@ -457,7 +480,8 @@ pub fn default_config_path() -> PathBuf {
 const DEFAULT_CONFIG_TEMPLATE: &str = r#"# ulysses-link configuration
 version = 1
 
-# Where the symlink mirror tree is rooted.
+# Where the mirror tree is rooted.
+# Files are copied here and kept in bidirectional sync with source repos.
 # Tilde and env vars are expanded.
 output_dir = "{{output_dir}}"
 

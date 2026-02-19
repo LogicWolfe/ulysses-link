@@ -1,8 +1,8 @@
 # ulysses-link
 
-A background service that extracts documentation files from code repositories and links them into a directory structure that [Ulysses](https://ulysses.app) can import as an external folder.
+A background service that extracts documentation files from code repositories and mirrors them into a directory structure that [Ulysses](https://ulysses.app) can import as an external folder.
 
-Files are linked via symlinks, so edits in Ulysses write directly to the original files.
+Files are copied (using APFS copy-on-write, so zero extra disk space) and kept in bidirectional sync — edits made in Ulysses flow back to the source repos automatically.
 
 ## Getting started
 
@@ -12,13 +12,13 @@ Install the binary:
 cargo install ulysses-link
 ```
 
-Sync your first repo, specifying where the symlink tree should be rooted:
+Sync your first repo, specifying where the mirror tree should be rooted:
 
 ```sh
 ulysses-link sync ~/code/my-project ~/ulysses-link
 ```
 
-This creates a config file, scans the repo for documentation files, and creates symlinks under `~/ulysses-link/my-project/`.
+This creates a config file, scans the repo for documentation files, and copies them under `~/ulysses-link/my-project/`.
 
 Add more repos the same way:
 
@@ -36,7 +36,7 @@ The `sync` command does a one-time scan. To watch for changes continuously, inst
 ulysses-link install
 ```
 
-This installs a **launchd user agent** on macOS or a **systemd user unit** on Linux that starts on login and watches configured repos for changes.
+This installs a **launchd user agent** on macOS or a **systemd user unit** on Linux that starts on login and watches configured repos for changes. Edits made in Ulysses are detected and synced back to source repos.
 
 After installing the service, running `ulysses-link sync <path> <output>` will add the repo and notify the running service to pick it up.
 
@@ -58,9 +58,16 @@ ulysses-link config
 
 This opens `~/.config/ulysses-link/config.toml` in your `$EDITOR`.
 
-## Non-destructive sync
+## Bidirectional sync
 
-Sync will never overwrite real files in the output directory. If a regular file or directory exists where a symlink would be placed, it is skipped with a warning. Existing symlinks pointing to the wrong target are replaced.
+ulysses-link uses a manifest file (`.ulysses-link` in the output directory) to track every file it owns. This enables:
+
+- **Source → mirror:** Changes in your repos are copied to the mirror tree
+- **Mirror → source:** Edits made in Ulysses are copied back to the source repo
+- **Three-way merge:** When both sides change non-overlapping sections, changes are merged cleanly
+- **Conflict resolution:** When both sides change the same lines, the newest version wins and the older version is saved as a `.conflict_<timestamp>` file
+
+Files not tracked in the manifest (like Ulysses metadata files) are never modified or deleted.
 
 ## Service management
 
@@ -117,7 +124,7 @@ path = "~/code/another-project"
 | Field | Default | Description |
 |---|---|---|
 | `version` | — | Required. Must be `1`. |
-| `output_dir` | — | Required. Root of the symlink mirror tree. |
+| `output_dir` | — | Required. Root of the mirror tree. |
 | `debounce_seconds` | `0.5` | Seconds to wait after a burst of filesystem events before syncing. Range: 0.0–30.0. |
 | `log_level` | `"INFO"` | One of `TRACE`, `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 | `global_exclude` | *(see below)* | Exclude patterns applied to all repos. `.gitignore` syntax. |
@@ -139,6 +146,10 @@ path = "~/code/another-project"
 **Excludes:** `.git/`, `.svn/`, `.hg/`, `node_modules/`, `bower_components/`, `vendor/`, `.pnpm-store/`, `.venv/`, `venv/`, `dist/`, `build/`, `out/`, `target/`, `_build/`, `.next/`, `.nuxt/`, `.svelte-kit/`, `.docusaurus/`, `__pycache__/`, `*.pyc`, `*.pyo`, `.mypy_cache/`, `.pytest_cache/`, `.ruff_cache/`, `.tox/`, `*.egg-info/`, `.idea/`, `.vscode/`, `*.swp`, `*.swo`, `*~`, `.DS_Store`, `Thumbs.db`, `coverage/`, `htmlcov/`, `.nyc_output/`, `.cache/`, `.gradle/`, `.terraform/`
 
 Exclude patterns are checked before includes, so a file like `node_modules/pkg/README.md` stays excluded. Setting `global_exclude` or `global_include` in the config replaces the defaults entirely.
+
+### Manifest file
+
+The manifest (`.ulysses-link`) is stored in the output directory and tracks every file ulysses-link owns. A base version cache (`.ulysses-link.d/`) stores the last-synced content of each file for three-way merging. Both are managed automatically.
 
 ## Development
 

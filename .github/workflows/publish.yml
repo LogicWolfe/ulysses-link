@@ -5,52 +5,55 @@ on:
     branches: [main]
 
 jobs:
-  publish:
+  lint:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ulysses-link
-
+    container: rust:latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
+      - run: cargo clippy -- -D warnings
 
-      - name: Check for version change
+  test:
+    runs-on: ubuntu-latest
+    container: rust:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test
+
+  publish:
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    container: rust:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check version against crates.io
         id: version
         run: |
           CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          PREVIOUS=$(git show HEAD~1:ulysses-link/Cargo.toml | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
-          echo "previous=$PREVIOUS" >> "$GITHUB_OUTPUT"
-          if [ "$CURRENT" != "$PREVIOUS" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Version changed: $PREVIOUS -> $CURRENT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "Version unchanged: $CURRENT"
+          PUBLISHED=$(curl -s https://crates.io/api/v1/crates/ulysses-link | jq -r '.crate.max_version // empty' 2>/dev/null || echo "0.0.0")
+
+          if [ -z "$PUBLISHED" ]; then
+            PUBLISHED="0.0.0"
           fi
 
-      - name: Install Rust
-        if: steps.version.outputs.changed == 'true'
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Run tests
-        if: steps.version.outputs.changed == 'true'
-        run: cargo test
-
-      - name: Run clippy
-        if: steps.version.outputs.changed == 'true'
-        run: cargo clippy -- -D warnings
+          LOWEST=$(printf '%s\n' "$PUBLISHED" "$CURRENT" | sort -V | head -1)
+          if [ "$LOWEST" = "$PUBLISHED" ] && [ "$PUBLISHED" != "$CURRENT" ]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "New version: $CURRENT (published: $PUBLISHED)"
+          else
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "No publish needed: $CURRENT (published: $PUBLISHED)"
+          fi
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
 
       - name: Publish to crates.io
-        if: steps.version.outputs.changed == 'true'
+        if: steps.version.outputs.should_publish == 'true'
         run: cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Create git tag
-        if: steps.version.outputs.changed == 'true'
+        if: steps.version.outputs.should_publish == 'true'
         run: |
           TAG="v${{ steps.version.outputs.current }}"
           git tag "$TAG"

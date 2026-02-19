@@ -1,6 +1,6 @@
 [package]
 name = "ulysses-link"
-version = "0.1.0"
+version = "0.9.0"
 edition = "2021"
 description = "Background service that extracts documentation files from code repositories and links them for Ulysses external folder importing"
 license = "MIT"
@@ -16,12 +16,14 @@ path = "src/main.rs"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 ctrlc = { version = "3", features = ["termination"] }
+dialoguer = "0.11"
 dirs = "6"
 globset = "0.4"
 ignore = "0.4"
 notify = "7"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+toml_edit = "0.22"
 shellexpand = "3"
 thiserror = "2"
 tracing = "0.1"

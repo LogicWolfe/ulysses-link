@@ -430,6 +430,176 @@ log_level = "INFO"
 # include = ["*.tex"]           # merged with global_include
 "#;
 
+// --- Config modification ---
+
+/// Add a repo to the config file if not already present.
+/// Uses toml_edit to preserve comments and formatting.
+pub fn add_repo(config_path: &Path, repo_path: &Path) -> Result<bool, ConfigError> {
+    let contents = std::fs::read_to_string(config_path)?;
+    let mut doc = contents
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| ConfigError::Validation(format!("Failed to parse config: {e}")))?;
+
+    let repo_str = repo_path.to_string_lossy().to_string();
+
+    // Check if this repo path already exists
+    if let Some(repos) = doc.get("repos").and_then(|v| v.as_array_of_tables()) {
+        for repo in repos.iter() {
+            if let Some(path) = repo.get("path").and_then(|v| v.as_str()) {
+                let existing = expand_path(path).ok();
+                let new = expand_path(&repo_str).ok();
+                if existing.is_some() && existing == new {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+
+    // Append a new [[repos]] entry
+    let repos = doc
+        .entry("repos")
+        .or_insert_with(|| toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()));
+    if let Some(array) = repos.as_array_of_tables_mut() {
+        let mut table = toml_edit::Table::new();
+        table.insert("path", toml_edit::value(&repo_str));
+        array.push(table);
+    }
+
+    std::fs::write(config_path, doc.to_string())?;
+    Ok(true)
+}
+
+/// Remove a repo from the config file by matching its path.
+/// Returns the repo name if found and removed.
+pub fn remove_repo(config_path: &Path, repo_path: &Path) -> Result<Option<String>, ConfigError> {
+    let contents = std::fs::read_to_string(config_path)?;
+    let mut doc = contents
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| ConfigError::Validation(format!("Failed to parse config: {e}")))?;
+
+    let target = expand_path(&repo_path.to_string_lossy()).ok();
+
+    let mut removed_name = None;
+
+    if let Some(repos) = doc.get_mut("repos").and_then(|v| v.as_array_of_tables_mut()) {
+        let mut remove_idx = None;
+        for (i, repo) in repos.iter().enumerate() {
+            if let Some(path) = repo.get("path").and_then(|v| v.as_str()) {
+                let existing = expand_path(path).ok();
+                if existing.is_some() && existing == target {
+                    removed_name = repo
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| {
+                            existing.as_ref().and_then(|p| {
+                                p.file_name().map(|n| n.to_string_lossy().to_string())
+                            })
+                        });
+                    remove_idx = Some(i);
+                    break;
+                }
+            }
+        }
+        if let Some(idx) = remove_idx {
+            repos.remove(idx);
+        }
+    }
+
+    if removed_name.is_some() {
+        std::fs::write(config_path, doc.to_string())?;
+    }
+
+    Ok(removed_name)
+}
+
+/// Ensure a config file exists, prompting the user to create one if needed.
+/// Returns the config path.
+pub fn ensure_config_exists(config_arg: Option<&Path>) -> Result<PathBuf, ConfigError> {
+    match find_config_path(config_arg) {
+        Ok(path) => Ok(path),
+        Err(ConfigError::NoConfigFound) => {
+            let dest = default_config_path();
+            println!(
+                "No config file found. Create default config at {}?",
+                dest.display()
+            );
+            println!("  Output directory: ~/ulysses-link");
+
+            let selection = dialoguer::Select::new()
+                .items(&["Yes", "Edit first", "No"])
+                .default(0)
+                .interact()
+                .map_err(|e| ConfigError::Validation(format!("Input error: {e}")))?;
+
+            match selection {
+                0 => {
+                    generate_default_config(&dest)?;
+                    println!("Created {}", dest.display());
+                    Ok(dest)
+                }
+                1 => {
+                    generate_default_config(&dest)?;
+                    println!("Created {}", dest.display());
+                    open_in_editor(&dest)?;
+                    Ok(dest)
+                }
+                _ => {
+                    std::process::exit(0);
+                }
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Open a file in the user's preferred editor.
+pub fn open_in_editor(path: &Path) -> Result<(), ConfigError> {
+    let editor = std::env::var("EDITOR").or_else(|_| std::env::var("VISUAL"));
+
+    let status = match editor {
+        Ok(editor) => std::process::Command::new(&editor)
+            .arg(path)
+            .status()
+            .map_err(|e| {
+                ConfigError::Validation(format!("Failed to open editor '{editor}': {e}"))
+            })?,
+        Err(_) => {
+            #[cfg(target_os = "macos")]
+            {
+                std::process::Command::new("open")
+                    .arg("-t")
+                    .arg(path)
+                    .status()
+                    .map_err(|e| {
+                        ConfigError::Validation(format!("Failed to open file: {e}"))
+                    })?
+            }
+            #[cfg(target_os = "linux")]
+            {
+                std::process::Command::new("xdg-open")
+                    .arg(path)
+                    .status()
+                    .map_err(|e| {
+                        ConfigError::Validation(format!("Failed to open file: {e}"))
+                    })?
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+            {
+                return Err(ConfigError::Validation(
+                    "Set $EDITOR to open config files".into(),
+                ));
+            }
+        }
+    };
+
+    if !status.success() {
+        return Err(ConfigError::Validation("Editor exited with an error".into()));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,5 +803,112 @@ mod tests {
         let _guard = std::env::set_current_dir(tmp.path());
         let err = find_config_path(None);
         assert!(matches!(err, Err(ConfigError::NoConfigFound)));
+    }
+
+    #[test]
+    fn test_add_repo() {
+        let tmp = TempDir::new().unwrap();
+        let repo_dir = tmp.path().join("my-repo");
+        fs::create_dir(&repo_dir).unwrap();
+        let output_dir = tmp.path().join("output");
+
+        let config_path = write_config(
+            tmp.path(),
+            &format!("version = 1\noutput_dir = \"{}\"", output_dir.display()),
+        );
+
+        // First add should succeed
+        let added = add_repo(&config_path, &repo_dir).unwrap();
+        assert!(added);
+
+        // Verify it's in the config
+        let config = load_config(Some(&config_path)).unwrap();
+        assert_eq!(config.repos.len(), 1);
+
+        // Second add of same path should be idempotent
+        let added_again = add_repo(&config_path, &repo_dir).unwrap();
+        assert!(!added_again);
+
+        let config = load_config(Some(&config_path)).unwrap();
+        assert_eq!(config.repos.len(), 1);
+    }
+
+    #[test]
+    fn test_add_multiple_repos() {
+        let tmp = TempDir::new().unwrap();
+        let repo1 = tmp.path().join("repo1");
+        let repo2 = tmp.path().join("repo2");
+        fs::create_dir(&repo1).unwrap();
+        fs::create_dir(&repo2).unwrap();
+        let output_dir = tmp.path().join("output");
+
+        let config_path = write_config(
+            tmp.path(),
+            &format!("version = 1\noutput_dir = \"{}\"", output_dir.display()),
+        );
+
+        add_repo(&config_path, &repo1).unwrap();
+        add_repo(&config_path, &repo2).unwrap();
+
+        let config = load_config(Some(&config_path)).unwrap();
+        assert_eq!(config.repos.len(), 2);
+    }
+
+    #[test]
+    fn test_remove_repo() {
+        let tmp = TempDir::new().unwrap();
+        let repo_dir = tmp.path().join("my-repo");
+        fs::create_dir(&repo_dir).unwrap();
+        let output_dir = tmp.path().join("output");
+
+        let config_path = write_config(
+            tmp.path(),
+            &format!(
+                "version = 1\noutput_dir = \"{}\"\n\n[[repos]]\npath = \"{}\"",
+                output_dir.display(),
+                repo_dir.display()
+            ),
+        );
+
+        let removed = remove_repo(&config_path, &repo_dir).unwrap();
+        assert!(removed.is_some());
+
+        let config = load_config(Some(&config_path)).unwrap();
+        assert_eq!(config.repos.len(), 0);
+    }
+
+    #[test]
+    fn test_remove_nonexistent_repo() {
+        let tmp = TempDir::new().unwrap();
+        let output_dir = tmp.path().join("output");
+
+        let config_path = write_config(
+            tmp.path(),
+            &format!("version = 1\noutput_dir = \"{}\"", output_dir.display()),
+        );
+
+        let removed = remove_repo(&config_path, Path::new("/nonexistent")).unwrap();
+        assert!(removed.is_none());
+    }
+
+    #[test]
+    fn test_add_repo_preserves_comments() {
+        let tmp = TempDir::new().unwrap();
+        let repo_dir = tmp.path().join("my-repo");
+        fs::create_dir(&repo_dir).unwrap();
+        let output_dir = tmp.path().join("output");
+
+        let config_path = write_config(
+            tmp.path(),
+            &format!(
+                "# My config\nversion = 1\noutput_dir = \"{}\"",
+                output_dir.display()
+            ),
+        );
+
+        add_repo(&config_path, &repo_dir).unwrap();
+
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains("# My config"));
     }
 }

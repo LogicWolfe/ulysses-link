@@ -123,6 +123,53 @@ pub fn print_status() -> Result<()> {
     }
 }
 
+/// Check if the background service is currently running.
+pub fn is_running() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        is_running_launchd()
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        is_running_systemd()
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        false
+    }
+}
+
+/// Send SIGHUP to the running service to trigger a config reload.
+pub fn send_reload_signal() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("launchctl")
+            .args(["kill", "SIGHUP", &format!("gui/{}/{LAUNCHD_LABEL}", unsafe { libc::getuid() })])
+            .output()
+            .context("Failed to send SIGHUP via launchctl")?;
+        if !output.status.success() {
+            anyhow::bail!("launchctl kill SIGHUP failed");
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("systemctl")
+            .args(["--user", "reload", SYSTEMD_UNIT_NAME])
+            .status()
+            .context("Failed to reload systemd unit")?;
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        anyhow::bail!("Reload signal not supported on this platform")
+    }
+}
+
 // --- macOS launchd ---
 
 #[cfg(target_os = "macos")]
@@ -248,17 +295,32 @@ fn uninstall_launchd() -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn status_launchd() -> Result<()> {
-    let output = Command::new("launchctl")
+fn is_running_launchd() -> bool {
+    Command::new("launchctl")
         .args(["list"])
         .output()
-        .context("Failed to run launchctl list")?;
+        .ok()
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .any(|line| line.contains(LAUNCHD_LABEL))
+        })
+        .unwrap_or(false)
+}
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        if line.contains(LAUNCHD_LABEL) {
-            println!("Service is running: {}", line.trim());
-            return Ok(());
+#[cfg(target_os = "macos")]
+fn status_launchd() -> Result<()> {
+    if is_running_launchd() {
+        let output = Command::new("launchctl")
+            .args(["list"])
+            .output()
+            .context("Failed to run launchctl list")?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if line.contains(LAUNCHD_LABEL) {
+                println!("Service is running: {}", line.trim());
+                return Ok(());
+            }
         }
     }
     println!("Service is not running.");
@@ -347,6 +409,15 @@ fn uninstall_systemd() -> Result<()> {
         println!("Service is not installed.");
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn is_running_systemd() -> bool {
+    Command::new("systemctl")
+        .args(["--user", "is-active", "--quiet", SYSTEMD_UNIT_NAME])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 #[cfg(target_os = "linux")]

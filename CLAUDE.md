@@ -4,12 +4,12 @@ This file provides guidance to AI coding assistants when working with code in th
 
 ## Repository Structure
 
-This repository contains **doc-link**, a lightweight background service that monitors local code repositories for Markdown files and maintains a mirror directory of symlinks. Designed for use with Ulysses or similar editors. Written in Rust — install with `cargo install doc-link`.
+This repository contains **ulysses-link**, a lightweight background service that extracts documentation files from code repositories and links them for Ulysses external folder importing. Written in Rust — install with `cargo install ulysses-link`.
 
 ```
-doc-link/
+ulysses-link/
 ├── Cargo.toml
-├── doc-link.toml.example
+├── ulysses-link.toml.example
 ├── src/
 │   ├── main.rs          # Entry point, clap CLI dispatch
 │   ├── lib.rs           # Library root, public module declarations
@@ -49,8 +49,8 @@ When a component expects a value to be provided:
 
 ### Server Interaction Constraints
 
-- **NEVER** start the doc-link service or run long-lived processes yourself
-- **DO NOT** run `doc-link run` or `doc-link install` yourself
+- **NEVER** start the ulysses-link service or run long-lived processes yourself
+- **DO NOT** run `ulysses-link run` or `ulysses-link install` yourself
 - **ALWAYS** ask the user to validate changes that require running the service
 - When validation is needed, explain what changes you've made and ask the user to run the validation steps
 

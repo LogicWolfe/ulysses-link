@@ -1,15 +1,15 @@
-# doc-link
+# ulysses-link
 
-A lightweight background service that monitors local code repositories for documentation files and maintains a mirror directory of symlinks. Point Ulysses (or any editor) at the mirror to see only your docs — no `node_modules`, no `.git`, no build artifacts.
+Extract the meaningful documentation from your code repositories and link it all into one place for [Ulysses](https://ulysses.app) external folder importing. No `node_modules`, no `.git`, no build artifacts — just your docs.
 
-Single native binary. No runtime dependencies. Install with `cargo install doc-link`.
+Single native binary. No runtime dependencies. Install with `cargo install ulysses-link`.
 
 ## How it works
 
-doc-link watches your repos for file changes and maintains a parallel directory tree of symlinks to just the documentation files:
+ulysses-link watches your repos for file changes and maintains a parallel directory tree of symlinks to just the documentation files:
 
 ```
-~/doc-link/
+~/ulysses-link/
   ├── my-project/
   │   ├── README.md → ~/code/my-project/README.md
   │   ├── LICENSE → ~/code/my-project/LICENSE
@@ -19,11 +19,11 @@ doc-link watches your repos for file changes and maintains a parallel directory 
       └── ...
 ```
 
-Symlinks mean edits in Ulysses flow through to the real files instantly — no syncing, no copies.
+Point Ulysses at `~/ulysses-link` as an external folder and you get a clean, unified view of all your project documentation. Symlinks mean edits in Ulysses flow through to the real files instantly — no syncing, no copies.
 
-## What gets mirrored
+## What gets linked
 
-Out of the box, doc-link includes these file types:
+Out of the box, ulysses-link includes these file types:
 
 | Pattern | What it catches |
 |---------|-----------------|
@@ -55,22 +55,22 @@ All patterns are configurable per-repo. Excludes are checked first, so `node_mod
 ## Install
 
 ```sh
-cargo install doc-link
+cargo install ulysses-link
 ```
 
 Or build from source:
 
 ```sh
-git clone <repo-url> && cd ulysses-code-docs/doc-link
+git clone https://github.com/LogicWolfe/ulysses-link.git && cd ulysses-link/ulysses-link
 cargo install --path .
 ```
 
 ## Configure
 
-On first run, doc-link generates a default config at `~/.config/doc-link/config.toml`. Or copy the example:
+On first run, ulysses-link generates a default config at `~/.config/ulysses-link/config.toml`. Or copy the example:
 
 ```sh
-cp doc-link.toml.example ~/.config/doc-link/config.toml
+cp ulysses-link.toml.example ~/.config/ulysses-link/config.toml
 ```
 
 Then add your repos and you're ready to go.
@@ -78,9 +78,9 @@ Then add your repos and you're ready to go.
 Config search order:
 
 1. `--config PATH` (explicit CLI flag)
-2. `./doc-link.toml` (current directory)
-3. `~/.config/doc-link/config.toml`
-4. `~/Library/Application Support/doc-link/config.toml` (macOS only)
+2. `./ulysses-link.toml` (current directory)
+3. `~/.config/ulysses-link/config.toml`
+4. `~/Library/Application Support/ulysses-link/config.toml` (macOS only)
 
 ### Minimal config
 
@@ -88,7 +88,7 @@ All you need is a version, output directory, and at least one repo:
 
 ```toml
 version = 1
-output_dir = "~/doc-link"
+output_dir = "~/ulysses-link"
 
 [[repos]]
 path = "~/code/my-project"
@@ -102,7 +102,7 @@ Add extra excludes or includes for specific repos:
 
 ```toml
 version = 1
-output_dir = "~/doc-link"
+output_dir = "~/ulysses-link"
 
 [[repos]]
 path = "~/code/my-project"
@@ -118,7 +118,7 @@ path = "~/code/another-repo"      # minimal — just the path, all defaults
 
 ```toml
 version = 1                        # required, must be 1
-output_dir = "~/doc-link"          # where the symlink tree lives
+output_dir = "~/ulysses-link"      # where the symlink tree lives
 debounce_seconds = 0.5             # batch rapid events (0.0–30.0)
 log_level = "INFO"                 # TRACE, DEBUG, INFO, WARNING, ERROR
 global_exclude = ["..."]           # override the default exclude list
@@ -133,6 +133,14 @@ include = ["..."]                  # merged with global_include
 
 Exclude patterns use `.gitignore` syntax. Include patterns use glob syntax.
 
+## Use with Ulysses
+
+1. Run `ulysses-link scan` to build the symlink tree
+2. In Ulysses, go to Library > Add External Folder
+3. Point it at `~/ulysses-link` (or your configured `output_dir`)
+4. All your documentation from all repos appears in one place
+5. Run `ulysses-link install` to keep it synced automatically in the background
+
 ## Run
 
 ### One-shot scan
@@ -140,8 +148,8 @@ Exclude patterns use `.gitignore` syntax. Include patterns use glob syntax.
 Build the full symlink tree once and exit. Good for testing your config:
 
 ```sh
-doc-link scan
-doc-link scan --config ~/my-config.toml
+ulysses-link scan
+ulysses-link scan --config ~/my-config.toml
 ```
 
 ### Foreground service
@@ -149,8 +157,8 @@ doc-link scan --config ~/my-config.toml
 Watch repos for changes continuously:
 
 ```sh
-doc-link run
-doc-link run --config ~/my-config.toml
+ulysses-link run
+ulysses-link run --config ~/my-config.toml
 ```
 
 Stop with `Ctrl-C`. Send `SIGHUP` to reload config without restarting.
@@ -160,7 +168,7 @@ Stop with `Ctrl-C`. Send `SIGHUP` to reload config without restarting.
 Install as an OS service that starts on login:
 
 ```sh
-doc-link install --config ~/.config/doc-link/config.toml
+ulysses-link install --config ~/.config/ulysses-link/config.toml
 ```
 
 This installs a **launchd user agent** on macOS or a **systemd user unit** on Linux. On Windows, it prints manual setup instructions for Task Scheduler or NSSM.
@@ -168,19 +176,19 @@ This installs a **launchd user agent** on macOS or a **systemd user unit** on Li
 Manage the service:
 
 ```sh
-doc-link status      # check if running
-doc-link uninstall   # stop and remove
+ulysses-link status      # check if running
+ulysses-link uninstall   # stop and remove
 ```
 
 ## CLI reference
 
 ```
-doc-link run [--config PATH]       Start watching repos (foreground)
-doc-link scan [--config PATH]      One-shot scan, then exit
-doc-link install [--config PATH]   Install as OS background service
-doc-link uninstall                 Remove OS background service
-doc-link status                    Check service status
-doc-link version                   Print version
+ulysses-link run [--config PATH]       Start watching repos (foreground)
+ulysses-link scan [--config PATH]      One-shot scan, then exit
+ulysses-link install [--config PATH]   Install as OS background service
+ulysses-link uninstall                 Remove OS background service
+ulysses-link status                    Check service status
+ulysses-link version                   Print version
 ```
 
 ## Development
@@ -208,7 +216,7 @@ cargo fmt
 ### Project structure
 
 ```
-doc-link/
+ulysses-link/
 ├── src/
 │   ├── main.rs          # clap CLI entry point
 │   ├── lib.rs           # library root

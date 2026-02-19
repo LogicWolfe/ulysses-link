@@ -99,14 +99,14 @@ pub fn prune_stale(repo_name: &str, output_dir: &Path) -> Result<u32> {
             // Check if target exists by trying to read the symlink target
             let target_exists = fs::read_link(path)
                 .ok()
-                .and_then(|link_target| {
+                .map(|link_target| {
                     // Resolve relative to parent dir
                     let absolute = if link_target.is_absolute() {
                         link_target
                     } else {
                         path.parent().unwrap_or(path).join(&link_target)
                     };
-                    Some(absolute.exists())
+                    absolute.exists()
                 })
                 .unwrap_or(false);
 

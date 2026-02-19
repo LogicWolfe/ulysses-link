@@ -1,9 +1,9 @@
-# doc-link configuration
+# ulysses-link configuration
 version = 1
 
 # Where the symlink mirror tree is rooted.
 # Tilde and env vars are expanded.
-output_dir = "~/doc-link"
+output_dir = "~/ulysses-link"
 
 # Debounce window in seconds for filesystem events.
 # After a burst of events (e.g. git pull), wait this long before syncing.

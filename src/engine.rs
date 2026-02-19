@@ -29,7 +29,7 @@ impl MirrorEngine {
 
     /// Start the engine: full scan, start watchers, register signals, enter main loop.
     pub fn start(&mut self) -> Result<()> {
-        info!("Starting doc-link engine");
+        info!("Starting ulysses-link engine");
 
         let result = full_scan(&self.config);
         info!(
@@ -64,7 +64,7 @@ impl MirrorEngine {
 
     /// Stop all watchers and clean up.
     pub fn stop(&mut self) {
-        info!("Stopping doc-link engine");
+        info!("Stopping ulysses-link engine");
         self.running.store(false, Ordering::SeqCst);
 
         for (name, watcher) in &mut self.watchers {

@@ -89,7 +89,7 @@ pub const DEFAULT_LOG_LEVEL: &str = "INFO";
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("No config file found. Create one at ~/.config/doc-link/config.toml or pass --config PATH.")]
+    #[error("No config file found. Create one at ~/.config/ulysses-link/config.toml or pass --config PATH.")]
     NoConfigFound,
 
     #[error("Config file not found: {0}")]
@@ -150,10 +150,10 @@ pub struct Config {
 // --- Config search ---
 
 pub fn config_search_paths() -> Vec<PathBuf> {
-    let mut paths = vec![PathBuf::from("./doc-link.toml")];
+    let mut paths = vec![PathBuf::from("./ulysses-link.toml")];
 
     if let Some(config_dir) = dirs::config_dir() {
-        paths.push(config_dir.join("doc-link").join("config.toml"));
+        paths.push(config_dir.join("ulysses-link").join("config.toml"));
     }
 
     #[cfg(target_os = "macos")]
@@ -161,7 +161,7 @@ pub fn config_search_paths() -> Vec<PathBuf> {
         paths.push(
             home.join("Library")
                 .join("Application Support")
-                .join("doc-link")
+                .join("ulysses-link")
                 .join("config.toml"),
         );
     }
@@ -393,16 +393,16 @@ pub fn generate_default_config(path: &Path) -> Result<(), ConfigError> {
 pub fn default_config_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("doc-link")
+        .join("ulysses-link")
         .join("config.toml")
 }
 
-const DEFAULT_CONFIG_CONTENT: &str = r#"# doc-link configuration
+const DEFAULT_CONFIG_CONTENT: &str = r#"# ulysses-link configuration
 version = 1
 
 # Where the symlink mirror tree is rooted.
 # Tilde and env vars are expanded.
-output_dir = "~/doc-link"
+output_dir = "~/ulysses-link"
 
 # Debounce window in seconds for filesystem events.
 # After a burst of events (e.g. git pull), wait this long before syncing.
@@ -437,7 +437,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn write_config(dir: &Path, content: &str) -> PathBuf {
-        let path = dir.join("doc-link.toml");
+        let path = dir.join("ulysses-link.toml");
         fs::write(&path, content).unwrap();
         path
     }

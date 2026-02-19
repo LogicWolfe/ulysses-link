@@ -1,5 +1,5 @@
 # Rust build artifacts
-doc-link/target/
+ulysses-link/target/
 
 # OS files
 .DS_Store

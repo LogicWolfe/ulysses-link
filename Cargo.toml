@@ -1,15 +1,15 @@
 [package]
-name = "doc-link"
+name = "ulysses-link"
 version = "0.1.0"
 edition = "2021"
-description = "Background service that monitors code repositories for Markdown files and maintains a mirror directory of symlinks"
+description = "Background service that extracts documentation files from code repositories and links them for Ulysses external folder importing"
 license = "MIT"
-repository = "https://github.com/nathanwilk7/doc-link"
-keywords = ["markdown", "symlink", "mirror", "documentation"]
+repository = "https://github.com/LogicWolfe/ulysses-link"
+keywords = ["markdown", "symlink", "ulysses", "documentation"]
 categories = ["command-line-utilities", "filesystem"]
 
 [[bin]]
-name = "doc-link"
+name = "ulysses-link"
 path = "src/main.rs"
 
 [dependencies]

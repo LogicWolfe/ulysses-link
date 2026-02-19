@@ -226,29 +226,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "doc-link"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "ctrlc",
- "dirs",
- "globset",
- "ignore",
- "libc",
- "notify",
- "serde",
- "shellexpand",
- "signal-hook",
- "tempfile",
- "thiserror",
- "toml",
- "tracing",
- "tracing-subscriber",
- "walkdir",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -959,6 +936,29 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "ulysses-link"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ctrlc",
+ "dirs",
+ "globset",
+ "ignore",
+ "libc",
+ "notify",
+ "serde",
+ "shellexpand",
+ "signal-hook",
+ "tempfile",
+ "thiserror",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "walkdir",
 ]
 
 [[package]]

@@ -224,8 +224,7 @@ fn flush_events(
 ) {
     let batch = {
         let mut p = pending.lock().unwrap();
-        let batch = std::mem::take(&mut p.events);
-        batch
+        std::mem::take(&mut p.events)
     };
 
     if batch.is_empty() {

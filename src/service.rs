@@ -7,10 +7,10 @@ use tracing::{info, warn};
 use crate::config::Config;
 
 #[cfg(target_os = "macos")]
-const LAUNCHD_LABEL: &str = "com.doc-link.agent";
+const LAUNCHD_LABEL: &str = "com.ulysses-link.agent";
 
 #[cfg(target_os = "linux")]
-const SYSTEMD_UNIT_NAME: &str = "doc-link.service";
+const SYSTEMD_UNIT_NAME: &str = "ulysses-link.service";
 
 fn binary_path() -> PathBuf {
     std::env::current_exe().expect("Failed to determine binary path")
@@ -23,7 +23,7 @@ fn log_dir() -> PathBuf {
             .expect("Failed to determine home directory")
             .join("Library")
             .join("Logs")
-            .join("doc-link");
+            .join("ulysses-link");
         std::fs::create_dir_all(&dir).ok();
         dir
     }
@@ -34,7 +34,7 @@ fn log_dir() -> PathBuf {
             .expect("Failed to determine home directory")
             .join(".local")
             .join("share")
-            .join("doc-link")
+            .join("ulysses-link")
             .join("logs");
         std::fs::create_dir_all(&dir).ok();
         dir
@@ -44,7 +44,7 @@ fn log_dir() -> PathBuf {
     {
         let dir = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("doc-link")
+            .join("ulysses-link")
             .join("logs");
         std::fs::create_dir_all(&dir).ok();
         dir
@@ -87,9 +87,9 @@ pub fn uninstall_service() -> Result<()> {
 
     #[cfg(target_os = "windows")]
     {
-        println!("To remove doc-link from Windows Task Scheduler:");
+        println!("To remove ulysses-link from Windows Task Scheduler:");
         println!("  1. Open Task Scheduler");
-        println!("  2. Find and delete the 'doc-link' task");
+        println!("  2. Find and delete the 'ulysses-link' task");
         Ok(())
     }
 
@@ -112,7 +112,7 @@ pub fn print_status() -> Result<()> {
 
     #[cfg(target_os = "windows")]
     {
-        println!("Check Windows Task Scheduler for 'doc-link' task status.");
+        println!("Check Windows Task Scheduler for 'ulysses-link' task status.");
         Ok(())
     }
 
@@ -144,7 +144,7 @@ fn build_plist(config: &Config) -> String {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    let args = vec![
+    let args = [
         binary.to_string_lossy().to_string(),
         "run".to_string(),
         "--config".to_string(),
@@ -174,9 +174,9 @@ fn build_plist(config: &Config) -> String {
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>{log}/doc-link.stdout.log</string>
+    <string>{log}/ulysses-link.stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>{log}/doc-link.stderr.log</string>
+    <string>{log}/ulysses-link.stderr.log</string>
     <key>ProcessType</key>
     <string>Background</string>
     <key>Nice</key>
@@ -288,7 +288,7 @@ fn build_unit(config: &Config) -> String {
 
     format!(
         r#"[Unit]
-Description=doc-link — Markdown symlink sync service
+Description=ulysses-link — documentation symlink sync service
 After=default.target
 
 [Service]
@@ -381,7 +381,7 @@ fn print_windows_instructions(config: &Config) {
     println!();
     println!("Option 1: Task Scheduler");
     println!("  1. Open Task Scheduler (taskschd.msc)");
-    println!("  2. Create a Basic Task named 'doc-link'");
+    println!("  2. Create a Basic Task named 'ulysses-link'");
     println!("  3. Set trigger: 'When I log on'");
     println!("  4. Set action: Start a program");
     println!("     Program: {}", binary.display());
@@ -390,11 +390,11 @@ fn print_windows_instructions(config: &Config) {
     println!("Option 2: NSSM (Non-Sucking Service Manager)");
     println!("  1. Download NSSM from https://nssm.cc/");
     println!(
-        "  2. Run: nssm install doc-link {} run --config {}",
+        "  2. Run: nssm install ulysses-link {} run --config {}",
         binary.display(),
         config_path
     );
-    println!("  3. Run: nssm start doc-link");
+    println!("  3. Run: nssm start ulysses-link");
     println!();
     println!("Note: Symlinks on Windows require Developer Mode enabled.");
     println!("  Settings > Update & Security > For developers > Developer Mode");
@@ -428,8 +428,8 @@ mod tests {
         assert!(plist.contains(LAUNCHD_LABEL));
         assert!(plist.contains("RunAtLoad"));
         assert!(plist.contains("KeepAlive"));
-        assert!(plist.contains("doc-link.stdout.log"));
-        assert!(plist.contains("doc-link.stderr.log"));
+        assert!(plist.contains("ulysses-link.stdout.log"));
+        assert!(plist.contains("ulysses-link.stderr.log"));
     }
 
     #[cfg(target_os = "linux")]
@@ -445,7 +445,7 @@ mod tests {
         };
 
         let unit = build_unit(&config);
-        assert!(unit.contains("doc-link"));
+        assert!(unit.contains("ulysses-link"));
         assert!(unit.contains("[Service]"));
         assert!(unit.contains("Restart=on-failure"));
     }

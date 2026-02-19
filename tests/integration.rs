@@ -17,7 +17,7 @@ fn create_test_config(repo_paths: &[&Path], output_dir: &Path, config_dir: &Path
         repos_toml
     );
 
-    let config_path = config_dir.join("doc-link.toml");
+    let config_path = config_dir.join("ulysses-link.toml");
     fs::write(&config_path, &config_content).unwrap();
     config_path.to_string_lossy().to_string()
 }
@@ -70,8 +70,8 @@ fn test_end_to_end_scan() {
 
     // Load and scan
     let config_path = std::path::PathBuf::from(&config_path_str);
-    let config = doc_link::config::load_config(Some(&config_path)).unwrap();
-    let result = doc_link::scanner::full_scan(&config);
+    let config = ulysses_link::config::load_config(Some(&config_path)).unwrap();
+    let result = ulysses_link::scanner::full_scan(&config);
 
     // Verify results
     assert!(result.errors == 0, "Expected no errors, got {}", result.errors);
@@ -104,13 +104,13 @@ fn test_end_to_end_scan() {
     assert!(!output.join("repo2").join(".venv").exists());
 
     // Run scan again — should be idempotent
-    let result2 = doc_link::scanner::full_scan(&config);
+    let result2 = ulysses_link::scanner::full_scan(&config);
     assert_eq!(result2.created, 0, "Second scan should create nothing");
     assert_eq!(result2.already_existed, result.created, "All should already exist");
 
     // Delete a source file and re-scan — should prune
     fs::remove_file(repo1.join("docs").join("guide.md")).unwrap();
-    let result3 = doc_link::scanner::full_scan(&config);
+    let result3 = ulysses_link::scanner::full_scan(&config);
     assert_eq!(result3.pruned, 1, "Should prune one stale symlink");
     assert!(!output.join("repo1").join("docs").join("guide.md").exists());
 }
@@ -136,13 +136,13 @@ fn test_repo_name_collision_in_mirror() {
     );
 
     let config_path = std::path::PathBuf::from(&config_path_str);
-    let config = doc_link::config::load_config(Some(&config_path)).unwrap();
+    let config = ulysses_link::config::load_config(Some(&config_path)).unwrap();
 
     assert_eq!(config.repos.len(), 2);
     assert_eq!(config.repos[0].name, "project");
     assert_eq!(config.repos[1].name, "project-2");
 
-    let result = doc_link::scanner::full_scan(&config);
+    let result = ulysses_link::scanner::full_scan(&config);
     assert_eq!(result.created, 2);
 
     // Both should have their own mirror directory

@@ -1,14 +1,14 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use doc_link::{config, engine, scanner, service};
+use ulysses_link::{config, engine, scanner, service};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Parser)]
 #[command(
-    name = "doc-link",
-    about = "Background service that monitors code repositories for Markdown files and maintains a mirror directory of symlinks",
+    name = "ulysses-link",
+    about = "Extracts documentation from code repos and links them for Ulysses external folder importing",
     version = VERSION
 )]
 struct Cli {
@@ -55,7 +55,7 @@ fn main() {
             std::process::exit(1);
         }
         Some(Commands::Version) => {
-            println!("doc-link {VERSION}");
+            println!("ulysses-link {VERSION}");
         }
         Some(Commands::Run { config }) => cmd_run(config),
         Some(Commands::Scan { config }) => cmd_scan(config),
@@ -97,7 +97,7 @@ fn setup_logging(log_level: &str) {
         _ => "info",
     };
 
-    let filter = EnvFilter::try_new(format!("doc_link={level}"))
+    let filter = EnvFilter::try_new(format!("ulysses_link={level}"))
         .unwrap_or_else(|_| EnvFilter::new("info"));
 
     tracing_subscriber::fmt()
